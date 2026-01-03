@@ -265,7 +265,7 @@ class TradingBot:
                     e_index=0, e_price=pos.stop_loss or pos.entry_price * (0.95 if is_long else 1.05),
                     e_candle_open=pos.entry_price,
                     f_index=0,
-                    fvg=FVG(0, 'bullish' if is_long else 'bearish', pos.entry_price, pos.entry_price),
+                    fvg=FVG(0, 'bullish' if is_long else 'bearish', pos.entry_price, pos.entry_price, 0),
                     entry_price=pos.entry_price,
                     stop_loss=pos.stop_loss or pos.entry_price * (0.95 if is_long else 1.05),
                     target=pos.take_profit or pos.entry_price * (1.05 if is_long else 0.95),
