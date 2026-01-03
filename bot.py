@@ -81,9 +81,16 @@ class TradingBot:
 
                 print(f"  ✓ {symbol}: {len(feed.candles)} candles loaded")
 
-                # Set leverage
+                # Set max leverage per symbol
+                MAX_LEVERAGE = {
+                    'BTCUSDT': 100, 'ETHUSDT': 100, 'SOLUSDT': 75, 'XRPUSDT': 75,
+                    'DOGEUSDT': 75, 'ADAUSDT': 75, 'AVAXUSDT': 50, 'LINKUSDT': 50,
+                    'DOTUSDT': 50, 'SUIUSDT': 50, 'LTCUSDT': 50, 'BCHUSDT': 50,
+                    'ATOMUSDT': 50, 'UNIUSDT': 50, 'APTUSDT': 50, 'ARBUSDT': 50,
+                    'OPUSDT': 50, 'NEARUSDT': 50, 'FILUSDT': 25, 'INJUSDT': 50,
+                }
                 try:
-                    self.client.set_leverage(symbol, 10)
+                    self.client.set_leverage(symbol, MAX_LEVERAGE.get(symbol, 50))
                 except:
                     pass  # Leverage might already be set
 
