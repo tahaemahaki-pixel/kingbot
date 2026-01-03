@@ -247,6 +247,18 @@ class BybitClient:
         self._request("POST", "/v5/position/set-leverage", params, signed=True)
         return True
 
+    def get_closed_pnl(self, symbol: str = None, limit: int = 20) -> List[Dict]:
+        """Get closed P&L records."""
+        params = {
+            "category": self.config.category,
+            "limit": limit
+        }
+        if symbol:
+            params["symbol"] = symbol
+
+        result = self._request("GET", "/v5/position/closed-pnl", params, signed=True)
+        return result.get("list", [])
+
 
 class BybitWebSocket:
     """Bybit WebSocket Client for real-time data."""

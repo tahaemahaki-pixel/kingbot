@@ -12,7 +12,8 @@ from config import BotConfig
 
 class TradeStatus(Enum):
     PENDING = "pending"  # Order not yet placed
-    OPEN = "open"  # Position is open
+    PENDING_FILL = "pending_fill"  # Limit order placed, waiting for fill
+    OPEN = "open"  # Position is open (order filled)
     CLOSED_TP = "closed_tp"  # Closed at take profit
     CLOSED_SL = "closed_sl"  # Closed at stop loss
     CLOSED_MANUAL = "closed_manual"  # Manually closed
@@ -120,9 +121,9 @@ class OrderManager:
 
     def can_open_trade(self, account_balance: float) -> tuple[bool, str]:
         """Check if we can open a new trade based on risk rules."""
-        # Check max positions
-        open_trades = [t for t in self.active_trades if t.status == TradeStatus.OPEN]
-        if len(open_trades) >= self.config.max_positions:
+        # Check max positions (include pending orders)
+        active_trades = [t for t in self.active_trades if t.status in (TradeStatus.OPEN, TradeStatus.PENDING_FILL)]
+        if len(active_trades) >= self.config.max_positions:
             return False, f"Max positions ({self.config.max_positions}) reached"
 
         # Check daily loss limit
@@ -177,11 +178,15 @@ class OrderManager:
                 )
 
             # Create trade record
+            # For limit orders, status is PENDING_FILL until filled
+            # For market orders, status is OPEN immediately
+            initial_status = TradeStatus.PENDING_FILL if self.config.use_limit_orders else TradeStatus.OPEN
+
             trade = Trade(
                 signal=signal,
-                status=TradeStatus.OPEN,
+                status=initial_status,
                 entry_order_id=order.order_id,
-                entry_filled_price=signal.entry_price if self.config.use_limit_orders else None,
+                entry_filled_price=signal.entry_price if not self.config.use_limit_orders else None,
                 position_size=position_size,
                 opened_at=time.time()
             )
@@ -194,15 +199,26 @@ class OrderManager:
 
             # Send Telegram notification
             if self.notifier:
-                self.notifier.notify_trade_opened(
-                    symbol=signal.symbol,
-                    side=side,
-                    entry=signal.entry_price,
-                    sl=signal.stop_loss,
-                    tp=signal.target,
-                    size=position_size,
-                    rr=signal.get_risk_reward()
-                )
+                if self.config.use_limit_orders:
+                    self.notifier.notify_order_placed(
+                        symbol=signal.symbol,
+                        side=side,
+                        entry=signal.entry_price,
+                        sl=signal.stop_loss,
+                        tp=signal.target,
+                        size=position_size,
+                        rr=signal.get_risk_reward()
+                    )
+                else:
+                    # Market order - immediately filled
+                    self.notifier.notify_order_filled(
+                        symbol=signal.symbol,
+                        side=side,
+                        entry=signal.entry_price,
+                        sl=signal.stop_loss,
+                        tp=signal.target,
+                        size=position_size
+                    )
 
             return trade
 
@@ -220,21 +236,64 @@ class OrderManager:
             current_time = time.time()
 
             for trade in self.active_trades[:]:
+                symbol = trade.signal.symbol
+                exchange_position = positions_by_symbol.get(symbol)
+
+                # Handle PENDING_FILL orders (limit orders waiting to fill)
+                if trade.status == TradeStatus.PENDING_FILL:
+                    # Skip if order was just placed (give it 10 seconds)
+                    if current_time - trade.opened_at < 10:
+                        continue
+
+                    # Check if position now exists (order filled)
+                    if exchange_position and exchange_position.size > 0:
+                        # Order filled! Update status and notify
+                        trade.status = TradeStatus.OPEN
+                        trade.entry_filled_price = exchange_position.entry_price
+                        print(f"Order filled: {symbol} @ {exchange_position.entry_price}")
+
+                        if self.notifier:
+                            side = "Buy" if trade.signal.signal_type == SignalType.LONG_KING else "Sell"
+                            self.notifier.notify_order_filled(
+                                symbol=symbol,
+                                side=side,
+                                entry=exchange_position.entry_price,
+                                sl=trade.signal.stop_loss,
+                                tp=trade.signal.target,
+                                size=trade.position_size
+                            )
+                        continue
+
+                    # Check if order was cancelled or expired
+                    try:
+                        open_orders = self.client.get_open_orders(symbol)
+                        has_pending_order = any(
+                            o.order_id == trade.entry_order_id for o in open_orders
+                        )
+
+                        if not has_pending_order:
+                            # Order gone but no position = cancelled/expired
+                            trade.status = TradeStatus.CANCELLED
+                            print(f"Order cancelled/expired: {symbol}")
+                            if self.notifier:
+                                side = "Buy" if trade.signal.signal_type == SignalType.LONG_KING else "Sell"
+                                self.notifier.notify_order_cancelled(symbol, side, "price moved away")
+                            self.active_trades.remove(trade)
+                    except Exception as e:
+                        print(f"Error checking orders for {symbol}: {e}")
+                    continue
+
+                # Handle OPEN trades (filled positions)
                 if trade.status != TradeStatus.OPEN:
                     continue
 
-                # Skip trades opened less than 60 seconds ago (API may not reflect yet)
+                # Skip trades opened less than 60 seconds ago
                 if current_time - trade.opened_at < 60:
                     continue
 
-                symbol = trade.signal.symbol
-
-                # Get position for this trade's symbol
-                exchange_position = positions_by_symbol.get(symbol)
-
-                # Check if position exists (order was filled)
+                # Check if position still exists
                 if exchange_position and exchange_position.size > 0:
-                    # Position exists, trade is active - nothing to do
+                    # Position still open
                     continue
 
                 # No position found - check if there's still a pending order
@@ -245,14 +304,32 @@ class OrderManager:
                     )
 
                     if has_pending_order:
-                        # Order still pending (not filled yet), keep waiting
                         continue
                 except Exception as e:
                     print(f"Error checking orders for {symbol}: {e}")
-                    continue  # Don't close on error, wait for next sync
+                    continue
 
-                # No position AND no pending order = trade was closed (SL/TP hit)
-                trade.status = TradeStatus.CLOSED_SL  # Assume SL, will refine
+                # Position closed - determine if TP or SL
+                # Try to get closed PnL from API to determine outcome
+                try:
+                    closed_pnl = self.client.get_closed_pnl(symbol, limit=5)
+                    if closed_pnl:
+                        # Find the most recent close for this symbol
+                        recent = closed_pnl[0]
+                        trade.realized_pnl = float(recent.get('closedPnl', 0))
+                        trade.exit_price = float(recent.get('avgExitPrice', 0))
+
+                        # Determine TP or SL based on P&L
+                        if trade.realized_pnl > 0:
+                            trade.status = TradeStatus.CLOSED_TP
+                        else:
+                            trade.status = TradeStatus.CLOSED_SL
+                    else:
+                        trade.status = TradeStatus.CLOSED_SL
+                except Exception as e:
+                    print(f"Error getting closed PnL: {e}")
+                    trade.status = TradeStatus.CLOSED_SL
+
                 self._finalize_trade(trade, exchange_position)
 
         except Exception as e:
@@ -335,14 +412,15 @@ class OrderManager:
     def get_stats(self) -> Dict:
         """Get trading statistics."""
         total_trades = len(self.closed_trades)
-        if total_trades == 0:
-            return {"total_trades": 0}
 
         winning_trades = [t for t in self.closed_trades if t.realized_pnl > 0]
         losing_trades = [t for t in self.closed_trades if t.realized_pnl < 0]
 
         total_profit = sum(t.realized_pnl for t in winning_trades)
         total_loss = abs(sum(t.realized_pnl for t in losing_trades))
+
+        open_trades = len([t for t in self.active_trades if t.status == TradeStatus.OPEN])
+        pending_orders = len([t for t in self.active_trades if t.status == TradeStatus.PENDING_FILL])
 
         return {
             "total_trades": total_trades,
@@ -352,7 +430,8 @@ class OrderManager:
             "total_pnl": sum(t.realized_pnl for t in self.closed_trades),
             "daily_pnl": self.daily_pnl,
             "profit_factor": total_profit / total_loss if total_loss > 0 else float('inf'),
-            "open_trades": len([t for t in self.active_trades if t.status == TradeStatus.OPEN])
+            "open_trades": open_trades,
+            "pending_orders": pending_orders
         }
 
     def reset_daily_stats(self):

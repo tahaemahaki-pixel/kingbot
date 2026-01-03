@@ -37,13 +37,13 @@ class TelegramNotifier:
             print(f"Telegram error: {e}")
             return False
 
-    def notify_trade_opened(self, symbol: str, side: str, entry: float, sl: float, tp: float, size: float, rr: float):
-        """Notify when a trade is opened."""
-        emoji = "🟢" if side == "Buy" else "🔴"
+    def notify_order_placed(self, symbol: str, side: str, entry: float, sl: float, tp: float, size: float, rr: float):
+        """Notify when a limit order is placed (pending fill)."""
+        emoji = "📝"
         direction = "LONG" if side == "Buy" else "SHORT"
 
         msg = f"""
-{emoji} <b>NEW TRADE OPENED</b>
+{emoji} <b>LIMIT ORDER PLACED</b>
 
 <b>Symbol:</b> {symbol}
 <b>Direction:</b> {direction}
@@ -52,20 +52,60 @@ class TelegramNotifier:
 <b>Take Profit:</b> ${tp:.4f}
 <b>Size:</b> {size:.4f}
 <b>R:R:</b> {rr:.2f}
+
+<i>Waiting for price to reach entry...</i>
+"""
+        self.send(msg.strip())
+
+    def notify_order_filled(self, symbol: str, side: str, entry: float, sl: float, tp: float, size: float):
+        """Notify when order is filled and trade is active."""
+        emoji = "🟢" if side == "Buy" else "🔴"
+        direction = "LONG" if side == "Buy" else "SHORT"
+
+        msg = f"""
+{emoji} <b>ORDER FILLED - TRADE ACTIVE</b>
+
+<b>Symbol:</b> {symbol}
+<b>Direction:</b> {direction}
+<b>Entry:</b> ${entry:.4f}
+<b>Stop Loss:</b> ${sl:.4f}
+<b>Take Profit:</b> ${tp:.4f}
+<b>Size:</b> {size:.4f}
+"""
+        self.send(msg.strip())
+
+    def notify_order_cancelled(self, symbol: str, side: str, reason: str = "expired"):
+        """Notify when a pending order is cancelled."""
+        direction = "LONG" if side == "Buy" else "SHORT"
+
+        msg = f"""
+⚪ <b>ORDER CANCELLED</b>
+
+<b>Symbol:</b> {symbol}
+<b>Direction:</b> {direction}
+<b>Reason:</b> {reason}
 """
         self.send(msg.strip())
 
     def notify_trade_closed(self, symbol: str, side: str, pnl: float, reason: str):
         """Notify when a trade is closed."""
-        emoji = "✅" if pnl >= 0 else "❌"
+        if reason == "closed_tp":
+            emoji = "🎯"
+            reason_text = "TAKE PROFIT HIT"
+        elif reason == "closed_sl":
+            emoji = "🛑"
+            reason_text = "STOP LOSS HIT"
+        else:
+            emoji = "📤"
+            reason_text = reason.upper()
+
         pnl_str = f"+${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
 
         msg = f"""
-{emoji} <b>TRADE CLOSED</b>
+{emoji} <b>{reason_text}</b>
 
 <b>Symbol:</b> {symbol}
 <b>P&L:</b> {pnl_str}
-<b>Reason:</b> {reason}
 """
         self.send(msg.strip())
 
