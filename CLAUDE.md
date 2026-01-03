@@ -4,6 +4,55 @@ A crypto trading bot that scans 20 coins on Bybit for "King" patterns and automa
 
 ---
 
+## Strategy Overview
+
+### King Patterns
+The bot detects two pattern types:
+- **Long King**: Bullish reversal pattern (buy signal)
+- **Short King**: Bearish reversal pattern (sell signal)
+
+### Pattern Structure (Long King Example)
+```
+A: Swing low INTO the EVWMA ribbon
+C: Swing high above A (this becomes the target)
+D: Close below A, then pullback into ribbon
+E: Lower low below D (this defines stop loss)
+F: Close above ribbon
+FVG: Bullish Fair Value Gap between E and F
+G: Entry when price retests the FVG
+```
+
+### Stop Loss Logic (Split Strategy)
+Based on backtesting, we use different SL methods per asset:
+- **ETH**: Candle Open SL (E candle open - 0.1%)
+- **All other coins**: Structure SL (E swing low/high - 0.1%)
+
+This split approach was determined by comparing both methods across multiple assets.
+
+---
+
+## Backtest Results Summary
+
+### Timeframe Comparison
+| Timeframe | Trades | Win Rate | Total P&L |
+|-----------|--------|----------|-----------|
+| 1-minute  | 246    | 44.7%    | +75.68R   |
+| 5-minute  | 372    | 42.2%    | +324.98R  |
+| 60-minute | 29     | 55.2%    | +18.27R   |
+| 1-week    | 7      | 57.1%    | +25.67R   |
+
+**5-minute is optimal** - best balance of opportunity and quality.
+
+### Stop Loss Method Comparison (5-min)
+| Asset | Structure SL | Candle Open SL | Winner |
+|-------|--------------|----------------|--------|
+| BTC   | +19.94R      | -162.48R       | Structure |
+| ETH   | +5.51R       | +260.65R       | Candle Open |
+| DOGE  | +20.35R      | +3.92R         | Structure |
+| PNUT  | +21.83R      | +4.92R         | Structure |
+
+---
+
 ## Quick Start Guide (For Beginners)
 
 ### Step 1: Open Terminal
@@ -113,8 +162,8 @@ kill 12345
 
 4. **Executes trades automatically** with:
    - Entry at FVG midpoint
-   - Stop loss at pattern low/high
-   - Take profit at pattern target
+   - Stop loss: Structure-based (swing low/high) for most coins, Candle Open for ETH
+   - Take profit at pattern target (Point C)
 
 5. **Risk management**:
    - 1% risk per trade
@@ -197,12 +246,15 @@ bybit_bot/
 ├── config.py        # Settings and coin list
 ├── bybit_client.py  # Connects to Bybit exchange
 ├── data_feed.py     # Gets price data
-├── strategy.py      # Finds King patterns
+├── strategy.py      # Finds King patterns (split SL logic)
 ├── order_manager.py # Places trades
 ├── notifier.py      # Telegram alerts
+├── start.py         # Entry point with single-instance check
+├── setup_vps.sh     # VPS deployment script
 ├── .env             # Your API keys (secret!)
 ├── bot.log          # Bot's diary (what it's doing)
-└── CLAUDE.md        # This file
+├── CLAUDE.md        # This file
+└── VPS_GUIDE.md     # VPS commands quick reference
 ```
 
 ---
@@ -246,12 +298,27 @@ cat bot.log
 
 ---
 
-## Current Account Info
+## VPS Deployment
+
+The bot runs 24/7 on a DigitalOcean VPS. See `VPS_GUIDE.md` for commands.
+
+Quick reference:
+```bash
+ssh root@209.38.84.47           # Connect to VPS
+journalctl -u kingbot -f        # View live logs
+systemctl restart kingbot       # Restart bot
+```
+
+---
+
+## Current Setup
 
 - **Exchange**: Bybit (Mainnet)
-- **Balance**: ~$271 USDT
-- **Risk per trade**: $2.71 (1%)
+- **Timeframe**: 5-minute candles
+- **Risk per trade**: 1%
 - **Max positions**: 3 at a time
+- **Leverage**: Max per symbol (BTC/ETH: 100x, most alts: 50x)
+- **VPS**: DigitalOcean (209.38.84.47)
 
 ---
 
