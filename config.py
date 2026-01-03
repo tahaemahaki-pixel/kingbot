@@ -5,7 +5,7 @@ import os
 from dataclasses import dataclass
 from typing import Optional, List
 
-# Top coins to scan (USDT perpetuals on Bybit)
+# Symbols to trade (USDT perpetuals on Bybit)
 DEFAULT_SYMBOLS = [
     "BTCUSDT",
     "ETHUSDT",
@@ -28,6 +28,12 @@ DEFAULT_SYMBOLS = [
     "FILUSDT",
     "INJUSDT",
 ]
+
+# Additional timeframe setups (symbol -> list of extra timeframes)
+# These are IN ADDITION to the default timeframe
+EXTRA_TIMEFRAMES = {
+    "ETHUSDT": ["1"],  # Also trade ETH on 1-minute
+}
 
 
 @dataclass

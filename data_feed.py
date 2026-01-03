@@ -25,6 +25,9 @@ class Candle:
     evwma_upper: float = None
     evwma_lower: float = None
 
+    # SMA for trend filter
+    sma300: float = None
+
 
 @dataclass
 class SwingPoint:
@@ -47,10 +50,11 @@ class FVG:
 class DataFeed:
     """Manages real-time candle data and indicators for a single symbol."""
 
-    def __init__(self, config: BotConfig, client: BybitClient, symbol: str):
+    def __init__(self, config: BotConfig, client: BybitClient, symbol: str, timeframe: str = None):
         self.config = config
         self.client = client
         self.symbol = symbol
+        self.timeframe = timeframe or config.timeframe  # Allow override
         self.candles: List[Candle] = []
         self.max_candles = 500  # Keep last 500 candles
         self.on_new_candle: Optional[Callable] = None
@@ -65,7 +69,7 @@ class DataFeed:
         """Load historical candles from API."""
         klines = self.client.get_klines(
             self.symbol,
-            self.config.timeframe,
+            self.timeframe,
             limit=limit
         )
 
@@ -104,7 +108,7 @@ class DataFeed:
         return prev_evwma * (nbfs - volume) / nbfs + (volume * price / nbfs)
 
     def _calculate_evwma_all(self):
-        """Calculate EVWMA for all candles."""
+        """Calculate EVWMA and SMA300 for all candles."""
         self.volume_sum.clear()
         self.evwma_mid_prev = None
         self.evwma_upper_prev = None
@@ -128,6 +132,13 @@ class DataFeed:
             self.evwma_mid_prev = candle.evwma_mid
             self.evwma_upper_prev = candle.evwma_upper
             self.evwma_lower_prev = candle.evwma_lower
+
+            # Calculate 300 SMA
+            if i >= 299:
+                sma_sum = sum(c.close for c in self.candles[i-299:i+1])
+                candle.sma300 = sma_sum / 300
+            else:
+                candle.sma300 = None
 
     def update_candle(self, data: Dict):
         """Update from WebSocket kline data."""
@@ -167,6 +178,13 @@ class DataFeed:
             self.evwma_mid_prev = new_candle.evwma_mid
             self.evwma_upper_prev = new_candle.evwma_upper
             self.evwma_lower_prev = new_candle.evwma_lower
+
+            # Calculate SMA300 for new candle
+            if len(self.candles) >= 299:
+                sma_sum = sum(c.close for c in self.candles[-299:]) + new_candle.close
+                new_candle.sma300 = sma_sum / 300
+            else:
+                new_candle.sma300 = None
 
             self.candles.append(new_candle)
 
@@ -271,6 +289,42 @@ class DataFeed:
         """Check if close is below ribbon lower."""
         candle = self.candles[index]
         return candle.evwma_lower is not None and close < candle.evwma_lower
+
+    def check_trend_filter(self, start_idx: int, end_idx: int, direction: str, threshold: float = 0.8) -> bool:
+        """
+        Check if at least threshold% of candles are above/below 300 SMA.
+
+        Args:
+            start_idx: Start index (A point)
+            end_idx: End index (G point)
+            direction: 'long' or 'short'
+            threshold: Percentage required (default 0.8 = 80%)
+
+        Returns:
+            True if trend filter passes
+        """
+        if start_idx >= end_idx or end_idx >= len(self.candles):
+            return False
+
+        # Count candles with valid SMA
+        valid_count = 0
+        trend_count = 0
+
+        for i in range(start_idx, end_idx + 1):
+            candle = self.candles[i]
+            if candle.sma300 is None:
+                continue
+
+            valid_count += 1
+            if direction == 'long' and candle.close > candle.sma300:
+                trend_count += 1
+            elif direction == 'short' and candle.close < candle.sma300:
+                trend_count += 1
+
+        if valid_count == 0:
+            return False
+
+        return (trend_count / valid_count) >= threshold
 
     def get_current_price(self) -> float:
         """Get current price (last close)."""

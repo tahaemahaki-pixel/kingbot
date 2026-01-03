@@ -1,12 +1,12 @@
 """
-King Strategy Trading Bot - Multi-Symbol Scanner
+King Strategy Trading Bot - Multi-Symbol, Multi-Timeframe Scanner
 """
 import time
 import signal
 import sys
 from datetime import datetime
-from typing import Optional, Dict, List
-from config import BotConfig
+from typing import Optional, Dict, List, Tuple
+from config import BotConfig, EXTRA_TIMEFRAMES
 from bybit_client import BybitClient, BybitWebSocket
 from data_feed import DataFeed, Candle
 from strategy import KingStrategy, SignalStatus, TradeSignal
@@ -14,8 +14,19 @@ from order_manager import OrderManager
 from notifier import TelegramNotifier
 
 
+def make_setup_key(symbol: str, timeframe: str) -> str:
+    """Create a unique key for a symbol+timeframe setup."""
+    return f"{symbol}_{timeframe}"
+
+
+def parse_setup_key(key: str) -> Tuple[str, str]:
+    """Parse a setup key into (symbol, timeframe)."""
+    parts = key.rsplit("_", 1)
+    return parts[0], parts[1]
+
+
 class TradingBot:
-    """Main trading bot orchestrator - scans multiple symbols."""
+    """Main trading bot orchestrator - scans multiple symbols and timeframes."""
 
     def __init__(self, config: BotConfig):
         self.config = config
@@ -27,7 +38,17 @@ class TradingBot:
         # Initialize notifier
         self.notifier = TelegramNotifier(config)
 
-        # Per-symbol components
+        # Build list of all setups: (symbol, timeframe) pairs
+        self.setups: List[Tuple[str, str]] = []
+        for symbol in config.symbols:
+            # Default timeframe for all symbols
+            self.setups.append((symbol, config.timeframe))
+            # Extra timeframes for specific symbols
+            if symbol in EXTRA_TIMEFRAMES:
+                for tf in EXTRA_TIMEFRAMES[symbol]:
+                    self.setups.append((symbol, tf))
+
+        # Per-setup components (keyed by "SYMBOL_TIMEFRAME")
         self.feeds: Dict[str, DataFeed] = {}
         self.strategies: Dict[str, KingStrategy] = {}
 
@@ -35,7 +56,7 @@ class TradingBot:
         self.order_manager = OrderManager(config, self.client, self.notifier)
         self.ws: Optional[BybitWebSocket] = None
 
-        # All active signals across symbols
+        # All active signals across setups
         self.all_signals: List[TradeSignal] = []
 
         # State
@@ -46,10 +67,11 @@ class TradingBot:
     def start(self):
         """Start the trading bot."""
         print("=" * 60)
-        print("King Strategy Trading Bot - Multi-Symbol Scanner")
+        print("King Strategy Trading Bot - Multi-Symbol, Multi-Timeframe")
         print("=" * 60)
-        print(f"Symbols: {len(self.config.symbols)} coins")
-        print(f"Timeframe: {self.config.timeframe}m")
+        print(f"Setups: {len(self.setups)} (symbol+timeframe combinations)")
+        for sym, tf in self.setups:
+            print(f"  - {sym} @ {tf}m")
         print(f"Testnet: {self.config.testnet}")
         print(f"Risk per trade: {self.config.risk_per_trade * 100}%")
         print(f"Max positions: {self.config.max_positions}")
@@ -63,11 +85,13 @@ class TradingBot:
         self._update_account_balance()
         print(f"\nAccount equity: ${self.account_equity:.2f}")
 
-        # Initialize feeds and strategies for each symbol
-        print(f"\nLoading historical data for {len(self.config.symbols)} symbols...")
-        for symbol in self.config.symbols:
+        # Initialize feeds and strategies for each setup
+        print(f"\nLoading historical data for {len(self.setups)} setups...")
+        unique_symbols = set()
+        for symbol, timeframe in self.setups:
+            setup_key = make_setup_key(symbol, timeframe)
             try:
-                feed = DataFeed(self.config, self.client, symbol)
+                feed = DataFeed(self.config, self.client, symbol, timeframe=timeframe)
                 feed.load_historical(200)
 
                 strategy = KingStrategy(
@@ -76,32 +100,34 @@ class TradingBot:
                     max_wait_candles=self.config.fvg_max_wait_candles
                 )
 
-                self.feeds[symbol] = feed
-                self.strategies[symbol] = strategy
-                self.candles_since_scan[symbol] = 0
+                self.feeds[setup_key] = feed
+                self.strategies[setup_key] = strategy
+                self.candles_since_scan[setup_key] = 0
 
-                print(f"  ✓ {symbol}: {len(feed.candles)} candles loaded")
+                print(f"  ✓ {symbol}@{timeframe}m: {len(feed.candles)} candles loaded")
 
-                # Set max leverage per symbol
-                MAX_LEVERAGE = {
-                    'BTCUSDT': 100, 'ETHUSDT': 100, 'SOLUSDT': 75, 'XRPUSDT': 75,
-                    'DOGEUSDT': 75, 'ADAUSDT': 75, 'AVAXUSDT': 50, 'LINKUSDT': 50,
-                    'DOTUSDT': 50, 'SUIUSDT': 50, 'LTCUSDT': 50, 'BCHUSDT': 50,
-                    'ATOMUSDT': 50, 'UNIUSDT': 50, 'APTUSDT': 50, 'ARBUSDT': 50,
-                    'OPUSDT': 50, 'NEARUSDT': 50, 'FILUSDT': 25, 'INJUSDT': 50,
-                }
-                try:
-                    self.client.set_leverage(symbol, MAX_LEVERAGE.get(symbol, 50))
-                except:
-                    pass  # Leverage might already be set
+                # Set max leverage per symbol (only once per symbol)
+                if symbol not in unique_symbols:
+                    unique_symbols.add(symbol)
+                    MAX_LEVERAGE = {
+                        'BTCUSDT': 100, 'ETHUSDT': 100, 'SOLUSDT': 75, 'XRPUSDT': 75,
+                        'DOGEUSDT': 75, 'ADAUSDT': 75, 'AVAXUSDT': 50, 'LINKUSDT': 50,
+                        'DOTUSDT': 50, 'SUIUSDT': 50, 'LTCUSDT': 50, 'BCHUSDT': 50,
+                        'ATOMUSDT': 50, 'UNIUSDT': 50, 'APTUSDT': 50, 'ARBUSDT': 50,
+                        'OPUSDT': 50, 'NEARUSDT': 50, 'FILUSDT': 25, 'INJUSDT': 50,
+                    }
+                    try:
+                        self.client.set_leverage(symbol, MAX_LEVERAGE.get(symbol, 50))
+                    except:
+                        pass  # Leverage might already be set
 
                 # Rate limit - don't hammer the API
                 time.sleep(0.1)
 
             except Exception as e:
-                print(f"  ✗ {symbol}: Failed to load - {e}")
+                print(f"  ✗ {symbol}@{timeframe}m: Failed to load - {e}")
 
-        print(f"\nLoaded {len(self.feeds)} symbols successfully")
+        print(f"\nLoaded {len(self.feeds)} setups successfully")
 
         # Check for existing positions (recovery after restart)
         self._recover_existing_positions()
@@ -110,9 +136,9 @@ class TradingBot:
         print("\nScanning for existing patterns...")
         self._scan_all_patterns()
 
-        # Connect WebSocket
+        # Connect WebSocket with all setup subscriptions
         print("\nConnecting to real-time feed...")
-        self.ws = BybitWebSocket(self.config, symbols=list(self.feeds.keys()), on_kline=self._on_kline)
+        self.ws = BybitWebSocket(self.config, on_kline=self._on_kline, subscriptions=self.setups)
         self.ws.connect()
 
         self.running = True
@@ -152,25 +178,31 @@ class TradingBot:
     def _on_kline(self, data: dict):
         """Handle new kline data from WebSocket."""
         symbol = data.get("symbol")
-        if not symbol or symbol not in self.feeds:
+        timeframe = data.get("timeframe")
+        if not symbol or not timeframe:
+            return
+
+        # Build the setup key
+        setup_key = make_setup_key(symbol, timeframe)
+        if setup_key not in self.feeds:
             return
 
         # Update the correct feed
-        self.feeds[symbol].update_candle(data)
+        self.feeds[setup_key].update_candle(data)
 
         # Only process on confirmed candles
         if not data.get("confirm"):
             return
 
-        new_candle = self.feeds[symbol].candles[-1]
-        self._on_new_candle(symbol, new_candle)
+        new_candle = self.feeds[setup_key].candles[-1]
+        self._on_new_candle(setup_key, new_candle)
 
-    def _on_new_candle(self, symbol: str, candle: Candle):
-        """Process a new confirmed candle for a symbol."""
+    def _on_new_candle(self, setup_key: str, candle: Candle):
+        """Process a new confirmed candle for a setup (symbol+timeframe)."""
         timestamp = datetime.fromtimestamp(candle.time / 1000).strftime("%H:%M")
 
-        # Update active signals for this symbol
-        strategy = self.strategies[symbol]
+        # Update active signals for this setup
+        strategy = self.strategies[setup_key]
         strategy.update_signals(candle)
 
         # Check for ready signals and execute
@@ -180,41 +212,43 @@ class TradingBot:
             trade = self.order_manager.execute_signal(sig, self.account_balance)
             if trade:
                 strategy.remove_signal(sig)
-                print(f"[{timestamp}] {symbol} -> Executed {sig.signal_type.value} @ {sig.entry_price:.2f}")
+                print(f"[{timestamp}] {setup_key} -> Executed {sig.signal_type.value} @ {sig.entry_price:.2f}")
 
-        # Scan for new patterns every 5 candles per symbol
-        self.candles_since_scan[symbol] = self.candles_since_scan.get(symbol, 0) + 1
-        if self.candles_since_scan[symbol] >= 5:
-            self._scan_symbol_patterns(symbol)
-            self.candles_since_scan[symbol] = 0
+        # Scan for new patterns every 5 candles per setup
+        self.candles_since_scan[setup_key] = self.candles_since_scan.get(setup_key, 0) + 1
+        if self.candles_since_scan[setup_key] >= 5:
+            self._scan_symbol_patterns(setup_key)
+            self.candles_since_scan[setup_key] = 0
 
     def _scan_all_patterns(self):
-        """Scan for patterns across all symbols."""
+        """Scan for patterns across all setups."""
         total_signals = 0
-        for symbol in self.feeds:
-            count = self._scan_symbol_patterns(symbol, quiet=True)
+        for setup_key in self.feeds:
+            count = self._scan_symbol_patterns(setup_key, quiet=True)
             total_signals += count
 
-        print(f"Found {total_signals} signals across {len(self.feeds)} symbols")
+        print(f"Found {total_signals} signals across {len(self.feeds)} setups")
         self._print_active_signals()
 
-    def _scan_symbol_patterns(self, symbol: str, quiet: bool = False) -> int:
-        """Scan for new King patterns on a symbol."""
-        strategy = self.strategies[symbol]
+    def _scan_symbol_patterns(self, setup_key: str, quiet: bool = False) -> int:
+        """Scan for new King patterns on a setup."""
+        strategy = self.strategies[setup_key]
         new_signals = strategy.scan_for_patterns()
 
         for sig in new_signals:
             strategy.add_signal(sig)
             if not quiet:
-                print(f"  [{symbol}] {sig.signal_type.value}: Entry={sig.entry_price:.2f} SL={sig.stop_loss:.2f} TP={sig.target:.2f} R:R={sig.get_risk_reward():.2f}")
+                print(f"  [{setup_key}] {sig.signal_type.value}: Entry={sig.entry_price:.2f} SL={sig.stop_loss:.2f} TP={sig.target:.2f} R:R={sig.get_risk_reward():.2f}")
 
         return len(new_signals)
 
     def _print_active_signals(self):
         """Print all active signals."""
         all_active = []
-        for symbol, strategy in self.strategies.items():
-            all_active.extend(strategy.active_signals)
+        for setup_key, strategy in self.strategies.items():
+            for sig in strategy.active_signals:
+                sig._setup_key = setup_key  # Tag for display
+                all_active.append(sig)
 
         if not all_active:
             print("No active signals")
@@ -224,7 +258,8 @@ class TradingBot:
         # Sort by R:R
         all_active.sort(key=lambda s: s.get_risk_reward(), reverse=True)
         for sig in all_active[:10]:  # Show top 10
-            print(f"  [{sig.symbol}] {sig.signal_type.value}: Entry={sig.entry_price:.4f} R:R={sig.get_risk_reward():.2f}")
+            setup_key = getattr(sig, '_setup_key', sig.symbol)
+            print(f"  [{setup_key}] {sig.signal_type.value}: Entry={sig.entry_price:.4f} R:R={sig.get_risk_reward():.2f}")
 
     def _update_account_balance(self):
         """Update account balance and equity from exchange."""
@@ -350,13 +385,13 @@ class TradingBot:
         """Print trading statistics."""
         stats = self.order_manager.get_stats()
 
-        # Count active signals across all symbols
+        # Count active signals across all setups
         total_signals = sum(len(s.active_signals) for s in self.strategies.values())
 
         print("\n" + "=" * 40)
         print("Trading Stats")
         print("=" * 40)
-        print(f"Symbols monitored: {len(self.feeds)}")
+        print(f"Setups monitored: {len(self.feeds)}")
         print(f"Active signals: {total_signals}")
         print(f"Open trades: {stats.get('open_trades', 0)}")
         print(f"Total trades: {stats.get('total_trades', 0)}")
@@ -378,8 +413,9 @@ class TradingBot:
         if self.ws:
             self.ws.disconnect()
 
-        # Cancel pending orders for all symbols
-        self.order_manager.cancel_pending_orders(list(self.feeds.keys()))
+        # Cancel pending orders for all unique symbols
+        unique_symbols = list(set(sym for sym, _ in self.setups))
+        self.order_manager.cancel_pending_orders(unique_symbols)
 
         # Print final stats
         self._print_stats()

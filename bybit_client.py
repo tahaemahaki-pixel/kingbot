@@ -276,9 +276,11 @@ class BybitClient:
 class BybitWebSocket:
     """Bybit WebSocket Client for real-time data."""
 
-    def __init__(self, config: BotConfig, symbols: List[str] = None, on_kline: Callable = None, on_trade: Callable = None):
+    def __init__(self, config: BotConfig, symbols: List[str] = None, on_kline: Callable = None, on_trade: Callable = None, subscriptions: List[tuple] = None):
         self.config = config
         self.symbols = symbols or config.symbols
+        # subscriptions: list of (symbol, timeframe) tuples for multi-timeframe support
+        self.subscriptions = subscriptions
         self.ws_url = BYBIT_WS_TESTNET if config.testnet else BYBIT_WS_MAINNET
         self.ws = None
         self.on_kline = on_kline
@@ -294,8 +296,9 @@ class BybitWebSocket:
             topic = data["topic"]
 
             if "kline" in topic:
-                # Extract symbol from topic: kline.5.BTCUSDT -> BTCUSDT
+                # Extract symbol and timeframe from topic: kline.5.BTCUSDT -> timeframe=5, symbol=BTCUSDT
                 parts = topic.split(".")
+                timeframe = parts[1] if len(parts) >= 2 else None
                 symbol = parts[2] if len(parts) >= 3 else None
 
                 kline_data = data.get("data", [])
@@ -303,6 +306,7 @@ class BybitWebSocket:
                     if self.on_kline:
                         self.on_kline({
                             "symbol": symbol,
+                            "timeframe": timeframe,
                             "time": int(kline["start"]),
                             "open": float(kline["open"]),
                             "high": float(kline["high"]),
@@ -333,15 +337,20 @@ class BybitWebSocket:
         """Handle WebSocket open."""
         print("WebSocket Connected")
 
-        # Subscribe to klines for all symbols
-        topics = [f"kline.{self.config.timeframe}.{symbol}" for symbol in self.symbols]
+        # Subscribe to klines - use subscriptions if provided, otherwise default behavior
+        if self.subscriptions:
+            # Multi-timeframe: subscribe to each (symbol, timeframe) pair
+            topics = [f"kline.{tf}.{sym}" for sym, tf in self.subscriptions]
+        else:
+            # Legacy: single timeframe for all symbols
+            topics = [f"kline.{self.config.timeframe}.{symbol}" for symbol in self.symbols]
 
         subscribe_msg = {
             "op": "subscribe",
             "args": topics
         }
         ws.send(json.dumps(subscribe_msg))
-        print(f"Subscribed to {len(self.symbols)} symbols: {', '.join(self.symbols[:5])}{'...' if len(self.symbols) > 5 else ''}")
+        print(f"Subscribed to {len(topics)} feeds: {', '.join(topics[:5])}{'...' if len(topics) > 5 else ''}")
 
     def connect(self):
         """Connect to WebSocket."""

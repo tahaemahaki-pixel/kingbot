@@ -1,6 +1,10 @@
 # King Strategy Trading Bot
 
-A crypto trading bot that scans 20 coins on Bybit for "King" patterns and automatically executes trades.
+A crypto trading bot that scans multiple coins on Bybit for "King" patterns across multiple timeframes and automatically executes trades.
+
+**Multi-Timeframe Support**: The bot can trade the same symbol on different timeframes simultaneously. Currently configured for:
+- All 20 coins on 5-minute timeframe
+- ETH also on 1-minute timeframe (total 21 setups)
 
 ---
 
@@ -29,6 +33,38 @@ Based on backtesting, we use different SL methods per asset:
 
 This split approach was determined by comparing both methods across multiple assets.
 
+### Pattern Detection Parameters
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| Swing Lookback | 3 | Candles on each side to confirm swing |
+| EVWMA Length | 20 | Ribbon calculation period |
+| Ribbon Buffer | 2% | "Into ribbon" tolerance |
+| FVG Max Wait | 20 candles | Max bars to wait for FVG retest |
+| Min R:R | 1.0 | Minimum risk-reward to take trade |
+
+**Swing Lookback Testing (SPY):**
+| Lookback | Swings | Trades | Win Rate | Return |
+|----------|--------|--------|----------|--------|
+| 3 | 10,836 | 224 | 70.5% | +6.80% |
+| 5 | 6,879 | 100 | 67.0% | -1.74% |
+| 10+ | <3,600 | <15 | - | Too few trades |
+
+Lookback of 3 is optimal - finds the most patterns while maintaining good win rate.
+
+### 300 SMA Trend Filter
+The bot applies a trend filter before taking trades:
+- **For Longs**: 80% of candles from A to F must be ABOVE the 300 SMA
+- **For Shorts**: 80% of candles from A to F must be BELOW the 300 SMA
+
+This filter improves results by ensuring trades align with the overall trend:
+| Asset | Without Filter | With Filter | Improvement |
+|-------|----------------|-------------|-------------|
+| BTC 1m | -0.43R | +6.05R | +6.48R |
+| Gold 5m | +3.44R | +11.10R | +7.66R |
+| SPY 1m | +6.80% return | +5.16% return | Lower DD (4.9% vs 12%) |
+
+Note: The filter reduces trade frequency but significantly reduces drawdown.
+
 ---
 
 ## Backtest Results Summary
@@ -50,6 +86,16 @@ This split approach was determined by comparing both methods across multiple ass
 | ETH   | +5.51R       | +260.65R       | Candle Open |
 | DOGE  | +20.35R      | +3.92R         | Structure |
 | PNUT  | +21.83R      | +4.92R         | Structure |
+| SPY   | +6.80%       | +0.40%         | Structure |
+
+### SPY Backtest Results (1-min, 7 months)
+| Config | Trades | Win Rate | Return | Max DD |
+|--------|--------|----------|--------|--------|
+| Structure SL + No Filter | 224 | 70.5% | +6.80% | 11.95% |
+| Structure SL + 300 SMA | 111 | 75.7% | +5.16% | 4.90% |
+| Candle Open SL + No Filter | 224 | 66.1% | +0.40% | 13.41% |
+
+**Conclusion**: Structure SL performs better for most assets. ETH is the exception.
 
 ---
 
@@ -158,14 +204,16 @@ kill 12345
 
 2. **Looks for "King" patterns** (special price patterns that predict reversals)
 
-3. **Waits for FVG retest** (price must come back to a specific zone)
+3. **Applies trend filter** (300 SMA - 80% of candles must align with trade direction)
 
-4. **Executes trades automatically** with:
-   - Entry at FVG midpoint
+4. **Waits for FVG retest** (price must come back to a specific zone)
+
+5. **Executes trades automatically** with:
+   - Entry at FVG midpoint (+ 0.03% buffer for better fills)
    - Stop loss: Structure-based (swing low/high) for most coins, Candle Open for ETH
    - Take profit at pattern target (Point C)
 
-5. **Risk management**:
+6. **Risk management**:
    - 1% risk per trade
    - Max 3 positions at once
    - 5% max daily loss limit
@@ -314,10 +362,15 @@ systemctl restart kingbot       # Restart bot
 ## Current Setup
 
 - **Exchange**: Bybit (Mainnet)
-- **Timeframe**: 5-minute candles
+- **Timeframes**:
+  - 5-minute candles (all 20 coins)
+  - 1-minute candles (ETH only)
+- **Total setups**: 21 (20 coins @ 5m + ETH @ 1m)
+- **Trend Filter**: 300 SMA (80% threshold)
 - **Risk per trade**: 1%
 - **Max positions**: 3 at a time
 - **Leverage**: Max per symbol (BTC/ETH: 100x, most alts: 50x)
+- **Entry buffer**: 0.03% above/below FVG midpoint
 - **VPS**: DigitalOcean (209.38.84.47)
 
 ---
