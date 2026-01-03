@@ -21,6 +21,8 @@ class Position:
     entry_price: float
     unrealized_pnl: float
     leverage: int
+    stop_loss: float = 0.0
+    take_profit: float = 0.0
 
 
 @dataclass
@@ -146,7 +148,9 @@ class BybitClient:
                     size=float(p["size"]),
                     entry_price=float(p["avgPrice"]),
                     unrealized_pnl=float(p.get("unrealisedPnl", 0)),
-                    leverage=int(p.get("leverage", 1))
+                    leverage=int(p.get("leverage", 1)),
+                    stop_loss=float(p.get("stopLoss", 0) or 0),
+                    take_profit=float(p.get("takeProfit", 0) or 0)
                 ))
 
         return positions

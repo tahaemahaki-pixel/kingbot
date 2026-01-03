@@ -102,6 +102,9 @@ class TradingBot:
 
         print(f"\nLoaded {len(self.feeds)} symbols successfully")
 
+        # Check for existing positions (recovery after restart)
+        self._recover_existing_positions()
+
         # Initial pattern scan
         print("\nScanning for existing patterns...")
         self._scan_all_patterns()
@@ -229,6 +232,64 @@ class TradingBot:
             self.account_balance = self.client.get_available_balance()
         except Exception as e:
             print(f"Balance update error: {e}")
+
+    def _recover_existing_positions(self):
+        """Check for existing positions from previous session and track them."""
+        from order_manager import Trade, TradeStatus
+        from strategy import TradeSignal, SignalType, SignalStatus
+        from data_feed import FVG
+
+        try:
+            positions = self.client.get_positions()
+            open_positions = [p for p in positions if p.size > 0]
+
+            if not open_positions:
+                print("\nNo existing positions to recover")
+                return
+
+            print(f"\nRecovering {len(open_positions)} existing position(s)...")
+
+            for pos in open_positions:
+                symbol = pos.symbol
+                is_long = pos.side == "Buy"
+
+                # Create a minimal signal for tracking (we don't have original pattern data)
+                # This is just for position management - SL/TP are already set on exchange
+                dummy_signal = TradeSignal(
+                    signal_type=SignalType.LONG_KING if is_long else SignalType.SHORT_KING,
+                    status=SignalStatus.FILLED,
+                    symbol=symbol,
+                    a_index=0, a_price=0,
+                    c_index=0, c_price=pos.take_profit or pos.entry_price * (1.05 if is_long else 0.95),
+                    d_index=0,
+                    e_index=0, e_price=pos.stop_loss or pos.entry_price * (0.95 if is_long else 1.05),
+                    e_candle_open=pos.entry_price,
+                    f_index=0,
+                    fvg=FVG(0, 'bullish' if is_long else 'bearish', pos.entry_price, pos.entry_price),
+                    entry_price=pos.entry_price,
+                    stop_loss=pos.stop_loss or pos.entry_price * (0.95 if is_long else 1.05),
+                    target=pos.take_profit or pos.entry_price * (1.05 if is_long else 0.95),
+                    created_at=0
+                )
+
+                # Create trade object
+                trade = Trade(
+                    signal=dummy_signal,
+                    status=TradeStatus.OPEN,
+                    entry_order_id="recovered",
+                    entry_filled_price=pos.entry_price,
+                    position_size=pos.size,
+                    opened_at=time.time() - 3600  # Pretend opened 1 hour ago
+                )
+
+                self.order_manager.active_trades.append(trade)
+                direction = "LONG" if is_long else "SHORT"
+                print(f"  ✓ {symbol}: {direction} {pos.size} @ ${pos.entry_price:.4f} (PnL: ${pos.unrealized_pnl:.2f})")
+
+            print(f"Recovered {len(open_positions)} position(s) - bot will track SL/TP")
+
+        except Exception as e:
+            print(f"Position recovery error: {e}")
 
     def _print_stats(self):
         """Print trading statistics."""
