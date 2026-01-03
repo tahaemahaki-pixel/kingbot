@@ -163,7 +163,9 @@ class KingStrategy:
                     continue
 
                 # Create signal
-                entry_price = (fvg.top + fvg.bottom) / 2
+                # Entry at FVG midpoint + 0.03% buffer for better fill rate on longs
+                fvg_midpoint = (fvg.top + fvg.bottom) / 2
+                entry_price = fvg_midpoint * 1.0003  # Slightly above midpoint
 
                 # ETH uses candle open SL (performs better), others use structure SL
                 if self.feed.symbol == "ETHUSDT":
@@ -277,7 +279,9 @@ class KingStrategy:
                     continue
 
                 # Create signal
-                entry_price = (fvg.top + fvg.bottom) / 2
+                # Entry at FVG midpoint - 0.03% buffer for better fill rate on shorts
+                fvg_midpoint = (fvg.top + fvg.bottom) / 2
+                entry_price = fvg_midpoint * 0.9997  # Slightly below midpoint
 
                 # ETH uses candle open SL (performs better), others use structure SL
                 if self.feed.symbol == "ETHUSDT":
