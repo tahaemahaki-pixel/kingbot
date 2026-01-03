@@ -39,7 +39,8 @@ class TradingBot:
         self.all_signals: List[TradeSignal] = []
 
         # State
-        self.account_balance = 0.0
+        self.account_balance = 0.0  # Available balance (for position sizing)
+        self.account_equity = 0.0   # Total equity (for display)
         self.candles_since_scan: Dict[str, int] = {}
 
     def start(self):
@@ -60,7 +61,7 @@ class TradingBot:
 
         # Get account balance
         self._update_account_balance()
-        print(f"\nAccount balance: ${self.account_balance:.2f}")
+        print(f"\nAccount equity: ${self.account_equity:.2f}")
 
         # Initialize feeds and strategies for each symbol
         print(f"\nLoading historical data for {len(self.config.symbols)} symbols...")
@@ -118,7 +119,7 @@ class TradingBot:
         print("\nBot is running. Press Ctrl+C to stop.\n")
 
         # Send Telegram notification
-        self.notifier.notify_bot_started(len(self.feeds), self.account_balance)
+        self.notifier.notify_bot_started(len(self.feeds), self.account_equity)
 
         # Main loop
         self._run_loop()
@@ -226,10 +227,12 @@ class TradingBot:
             print(f"  [{sig.symbol}] {sig.signal_type.value}: Entry={sig.entry_price:.4f} R:R={sig.get_risk_reward():.2f}")
 
     def _update_account_balance(self):
-        """Update account balance from exchange (uses AVAILABLE balance, not total)."""
+        """Update account balance and equity from exchange."""
         try:
-            # Use available balance to account for margin already in use
+            # Available balance for position sizing (excludes margin in use)
             self.account_balance = self.client.get_available_balance()
+            # Total equity for display (includes margin + unrealized PnL)
+            self.account_equity = self.client.get_equity()
         except Exception as e:
             print(f"Balance update error: {e}")
 

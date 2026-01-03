@@ -131,6 +131,15 @@ class BybitClient:
         except (IndexError, KeyError, ValueError):
             return 0.0
 
+    def get_equity(self) -> float:
+        """Get total equity (includes margin in use + unrealized PnL)."""
+        wallet = self.get_wallet_balance()
+        try:
+            account = wallet.get("list", [{}])[0]
+            return float(account.get("totalEquity", 0))
+        except (IndexError, KeyError, ValueError):
+            return 0.0
+
     def get_positions(self, symbol: str = None) -> List[Position]:
         """Get open positions."""
         params = {"category": self.config.category, "settleCoin": "USDT"}
