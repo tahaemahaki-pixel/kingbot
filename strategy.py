@@ -164,7 +164,13 @@ class KingStrategy:
 
                 # Create signal
                 entry_price = (fvg.top + fvg.bottom) / 2
-                stop_loss = e_swing.candle_open - (e_swing.candle_open * 0.001)  # Slightly below
+
+                # ETH uses candle open SL (performs better), others use structure SL
+                if self.feed.symbol == "ETHUSDT":
+                    stop_loss = e_swing.candle_open - (e_swing.candle_open * 0.001)  # Candle open
+                else:
+                    stop_loss = e_swing.price - (e_swing.price * 0.001)  # Structure (swing low)
+
                 target = c.price
 
                 signal = TradeSignal(
@@ -272,7 +278,13 @@ class KingStrategy:
 
                 # Create signal
                 entry_price = (fvg.top + fvg.bottom) / 2
-                stop_loss = e_swing.candle_open + (e_swing.candle_open * 0.001)
+
+                # ETH uses candle open SL (performs better), others use structure SL
+                if self.feed.symbol == "ETHUSDT":
+                    stop_loss = e_swing.candle_open + (e_swing.candle_open * 0.001)  # Candle open
+                else:
+                    stop_loss = e_swing.price + (e_swing.price * 0.001)  # Structure (swing high)
+
                 target = c.price
 
                 signal = TradeSignal(
