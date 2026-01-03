@@ -216,14 +216,10 @@ class TradingBot:
             print(f"  [{sig.symbol}] {sig.signal_type.value}: Entry={sig.entry_price:.4f} R:R={sig.get_risk_reward():.2f}")
 
     def _update_account_balance(self):
-        """Update account balance from exchange."""
+        """Update account balance from exchange (uses AVAILABLE balance, not total)."""
         try:
-            wallet = self.client.get_wallet_balance()
-            coins = wallet.get("list", [{}])[0].get("coin", [])
-            for coin in coins:
-                if coin.get("coin") == "USDT":
-                    self.account_balance = float(coin.get("walletBalance", 0))
-                    break
+            # Use available balance to account for margin already in use
+            self.account_balance = self.client.get_available_balance()
         except Exception as e:
             print(f"Balance update error: {e}")
 

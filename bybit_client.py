@@ -120,6 +120,15 @@ class BybitClient:
         params = {"accountType": "UNIFIED"}
         return self._request("GET", "/v5/account/wallet-balance", params, signed=True)
 
+    def get_available_balance(self) -> float:
+        """Get available balance (not locked in margin)."""
+        wallet = self.get_wallet_balance()
+        try:
+            account = wallet.get("list", [{}])[0]
+            return float(account.get("totalAvailableBalance", 0))
+        except (IndexError, KeyError, ValueError):
+            return 0.0
+
     def get_positions(self, symbol: str = None) -> List[Position]:
         """Get open positions."""
         params = {"category": self.config.category, "settleCoin": "USDT"}
