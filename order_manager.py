@@ -1,6 +1,7 @@
 """
 Order Manager - Handles order execution, SL/TP, and position tracking
 """
+import time
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict
 from enum import Enum
@@ -28,6 +29,9 @@ class Trade:
     entry_order_id: Optional[str] = None
     entry_filled_price: Optional[float] = None
     position_size: float = 0.0
+
+    # Timing
+    opened_at: float = 0.0  # Timestamp when trade was opened
 
     # P&L tracking
     realized_pnl: float = 0.0
@@ -178,7 +182,8 @@ class OrderManager:
                 status=TradeStatus.OPEN,
                 entry_order_id=order.order_id,
                 entry_filled_price=signal.entry_price if self.config.use_limit_orders else None,
-                position_size=position_size
+                position_size=position_size,
+                opened_at=time.time()
             )
 
             self.active_trades.append(trade)
@@ -212,8 +217,14 @@ class OrderManager:
             all_positions = self.client.get_positions()
             positions_by_symbol = {p.symbol: p for p in all_positions}
 
+            current_time = time.time()
+
             for trade in self.active_trades[:]:
                 if trade.status != TradeStatus.OPEN:
+                    continue
+
+                # Skip trades opened less than 60 seconds ago (API may not reflect yet)
+                if current_time - trade.opened_at < 60:
                     continue
 
                 # Get position for this trade's symbol
