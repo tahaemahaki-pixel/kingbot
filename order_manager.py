@@ -227,14 +227,33 @@ class OrderManager:
                 if current_time - trade.opened_at < 60:
                     continue
 
-                # Get position for this trade's symbol
-                exchange_position = positions_by_symbol.get(trade.signal.symbol)
+                symbol = trade.signal.symbol
 
-                # Check if position still exists
-                if exchange_position is None or exchange_position.size == 0:
-                    # Position was closed (SL or TP hit)
-                    trade.status = TradeStatus.CLOSED_SL  # Assume SL, will refine
-                    self._finalize_trade(trade, exchange_position)
+                # Get position for this trade's symbol
+                exchange_position = positions_by_symbol.get(symbol)
+
+                # Check if position exists (order was filled)
+                if exchange_position and exchange_position.size > 0:
+                    # Position exists, trade is active - nothing to do
+                    continue
+
+                # No position found - check if there's still a pending order
+                try:
+                    open_orders = self.client.get_open_orders(symbol)
+                    has_pending_order = any(
+                        o.order_id == trade.entry_order_id for o in open_orders
+                    )
+
+                    if has_pending_order:
+                        # Order still pending (not filled yet), keep waiting
+                        continue
+                except Exception as e:
+                    print(f"Error checking orders for {symbol}: {e}")
+                    continue  # Don't close on error, wait for next sync
+
+                # No position AND no pending order = trade was closed (SL/TP hit)
+                trade.status = TradeStatus.CLOSED_SL  # Assume SL, will refine
+                self._finalize_trade(trade, exchange_position)
 
         except Exception as e:
             print(f"Position sync error: {e}")
