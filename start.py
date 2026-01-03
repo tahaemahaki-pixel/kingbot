@@ -4,8 +4,8 @@ import os
 import sys
 import atexit
 
-# Set working directory and load env FIRST
-BOT_DIR = '/home/tahae/ai-content/data/Tradingdata/bybit_bot'
+# Set working directory to script location
+BOT_DIR = os.path.dirname(os.path.abspath(__file__))
 PID_FILE = os.path.join(BOT_DIR, 'bot.pid')
 
 os.chdir(BOT_DIR)
