@@ -16,9 +16,15 @@ from typing import List, Optional, Dict, Tuple
 from enum import Enum
 from collections import deque
 import numpy as np
+import json
+import os
 
 from config import BotConfig, SpreadPairConfig
 from data_feed import DataFeed, Candle
+
+
+# Pattern state persistence
+PATTERN_STATE_FILE = "data/pattern_state.json"
 
 
 class SpreadSignalType(Enum):
@@ -115,7 +121,7 @@ class SpreadStrategy:
         self.spread_history: deque = deque(maxlen=500)
         self.hedge_ratio: float = self.pair_config.hedge_ratio
 
-        # Pattern state machine
+        # Pattern state machine (will be loaded from disk if available)
         self.pattern_state: Dict = {'phase': 0}
 
         # Active signals
@@ -123,6 +129,9 @@ class SpreadStrategy:
 
         # Calculate initial spread and z-score
         self._initialize_spread()
+
+        # Load persisted pattern state after spread is initialized
+        self._load_pattern_state()
 
     def _initialize_spread(self):
         """Calculate spread from historical data and compute hedge ratio."""
@@ -190,6 +199,78 @@ class SpreadStrategy:
         if self.spread_history:
             print(f"Current z-score: {self.spread_history[-1].zscore:.2f}")
 
+    def _get_state_file_path(self) -> str:
+        """Get the pattern state file path."""
+        # Ensure data directory exists
+        os.makedirs("data", exist_ok=True)
+        return PATTERN_STATE_FILE
+
+    def _load_pattern_state(self):
+        """Load pattern state from disk if available."""
+        state_file = self._get_state_file_path()
+        pair_name = self.pair_config.name
+
+        if not os.path.exists(state_file):
+            return
+
+        try:
+            with open(state_file, 'r') as f:
+                all_states = json.load(f)
+
+            if pair_name in all_states:
+                saved_state = all_states[pair_name]
+                # Validate saved state is still relevant
+                if saved_state.get('phase', 0) > 0:
+                    # Restore the pattern state
+                    self.pattern_state = {
+                        'phase': saved_state['phase'],
+                        'type': saved_state.get('type'),
+                        'first_z': saved_state.get('first_z'),
+                        'first_time': saved_state.get('first_time'),
+                        'recovery_z': saved_state.get('recovery_z'),
+                        # Use current history length as first_idx approximation
+                        'first_idx': max(0, len(self.spread_history) - saved_state.get('bars_since_first', 50))
+                    }
+                    print(f"  Restored pattern state for {pair_name}: phase={saved_state['phase']}, type={saved_state.get('type')}")
+        except Exception as e:
+            print(f"  Could not load pattern state: {e}")
+
+    def _save_pattern_state(self):
+        """Save current pattern state to disk."""
+        state_file = self._get_state_file_path()
+        pair_name = self.pair_config.name
+
+        # Load existing states for other pairs
+        all_states = {}
+        if os.path.exists(state_file):
+            try:
+                with open(state_file, 'r') as f:
+                    all_states = json.load(f)
+            except:
+                pass
+
+        # Update state for this pair
+        if self.pattern_state.get('phase', 0) > 0:
+            all_states[pair_name] = {
+                'phase': self.pattern_state['phase'],
+                'type': self.pattern_state.get('type'),
+                'first_z': self.pattern_state.get('first_z'),
+                'first_time': self.pattern_state.get('first_time'),
+                'recovery_z': self.pattern_state.get('recovery_z'),
+                'bars_since_first': len(self.spread_history) - self.pattern_state.get('first_idx', 0),
+                'saved_at': int(self.spread_history[-1].time) if self.spread_history else 0
+            }
+        elif pair_name in all_states:
+            # Remove state when pattern resets
+            del all_states[pair_name]
+
+        # Save to disk
+        try:
+            with open(state_file, 'w') as f:
+                json.dump(all_states, f, indent=2)
+        except Exception as e:
+            print(f"  Could not save pattern state: {e}")
+
     def update(self, candle_a: Candle, candle_b: Candle) -> Optional[SpreadSignal]:
         """
         Update spread with new candles and check for patterns.
@@ -233,6 +314,9 @@ class SpreadStrategy:
         # Check for new pattern
         signal = self._check_pattern(spread_data)
 
+        # Persist pattern state after any changes
+        self._save_pattern_state()
+
         return signal
 
     def _check_pattern(self, data: SpreadData) -> Optional[SpreadSignal]:
@@ -249,7 +333,8 @@ class SpreadStrategy:
                     'phase': 1,
                     'type': 'long',
                     'first_idx': len(self.spread_history) - 1,
-                    'first_z': z
+                    'first_z': z,
+                    'first_time': data.time
                 }
 
         elif state['phase'] == 1 and state.get('type') == 'long':
@@ -305,7 +390,8 @@ class SpreadStrategy:
                     'phase': 1,
                     'type': 'short',
                     'first_idx': len(self.spread_history) - 1,
-                    'first_z': z
+                    'first_z': z,
+                    'first_time': data.time
                 }
 
         elif state['phase'] == 1 and state.get('type') == 'short':
