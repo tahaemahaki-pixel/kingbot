@@ -404,13 +404,17 @@ class OrderManager:
                 self.close_trade(trade, reason)
 
     def cancel_pending_orders(self, symbols: List[str] = None):
-        """Cancel all pending orders for given symbols."""
-        symbols = symbols or []
+        """Cancel only pending ENTRY orders (not SL/TP orders protecting open positions)."""
         try:
-            for symbol in symbols:
-                self.client.cancel_all_orders(symbol)
+            # Only cancel specific entry orders we're tracking, not all orders
+            # This preserves SL/TP orders for open positions
             for trade in self.active_trades[:]:
-                if trade.status == TradeStatus.PENDING:
+                if trade.status == TradeStatus.PENDING_FILL and trade.entry_order_id:
+                    try:
+                        self.client.cancel_order(trade.signal.symbol, trade.entry_order_id)
+                        print(f"Cancelled pending entry order {trade.entry_order_id} for {trade.signal.symbol}")
+                    except Exception as e:
+                        print(f"Failed to cancel order {trade.entry_order_id}: {e}")
                     trade.status = TradeStatus.CANCELLED
                     self.active_trades.remove(trade)
         except Exception as e:
