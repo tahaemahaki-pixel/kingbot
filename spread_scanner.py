@@ -45,8 +45,9 @@ class SpreadScanner:
     """
 
     # Pairs to monitor: (name, asset_a, asset_b, always_active)
+    # All pairs now dynamic - only trade when cointegrated (p < 0.05)
     PAIRS = [
-        ("ETH_BTC", "ETHUSDT", "BTCUSDT", True),   # Always active
+        ("ETH_BTC", "ETHUSDT", "BTCUSDT", False),  # Dynamic
         ("SOL_ETH", "SOLUSDT", "ETHUSDT", False),  # Dynamic
         ("SOL_BTC", "SOLUSDT", "BTCUSDT", False),  # Dynamic
     ]
