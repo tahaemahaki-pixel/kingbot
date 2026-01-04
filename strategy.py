@@ -199,7 +199,7 @@ class KingStrategy:
                 )
 
                 # Only add if R:R is favorable
-                if signal.get_risk_reward() < 1.0:
+                if signal.get_risk_reward() < 1.5:
                     continue
 
                 # Apply 300 SMA trend filter (80% of candles must be above SMA for longs)
@@ -321,7 +321,7 @@ class KingStrategy:
                 )
 
                 # Only add if R:R is favorable
-                if signal.get_risk_reward() < 1.0:
+                if signal.get_risk_reward() < 1.5:
                     continue
 
                 # Apply 300 SMA trend filter (80% of candles must be below SMA for shorts)
