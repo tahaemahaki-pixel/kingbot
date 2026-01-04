@@ -136,9 +136,18 @@ class TelegramNotifier:
 """
         self.send(msg.strip())
 
-    def notify_bot_started(self, symbols_count: int, balance: float):
+    def notify_bot_started(self, symbols_count: int, balance: float, spread_mode: bool = False):
         """Notify when bot starts."""
-        msg = f"""
+        if spread_mode:
+            msg = f"""
+🤖 <b>SPREAD BOT STARTED</b>
+
+<b>Pair:</b> ETH/BTC
+<b>Balance:</b> ${balance:.2f}
+<b>Status:</b> Monitoring z-score for MR Double Touch...
+"""
+        else:
+            msg = f"""
 🤖 <b>BOT STARTED</b>
 
 <b>Symbols:</b> {symbols_count}

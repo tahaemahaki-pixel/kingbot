@@ -187,7 +187,7 @@ class TradingBot:
         print("\nBot is running. Press Ctrl+C to stop.\n")
 
         # Send Telegram notification
-        self.notifier.notify_bot_started(len(self.feeds), self.account_equity)
+        self.notifier.notify_bot_started(len(self.feeds), self.account_equity, self.spread_mode)
 
         # Main loop
         self._run_loop()
