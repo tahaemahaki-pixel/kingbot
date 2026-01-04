@@ -24,7 +24,8 @@ class SignalStatus(Enum):
 class TradeSignal:
     signal_type: SignalType
     status: SignalStatus
-    symbol: str  # Trading symbol
+    symbol: str  # Trading symbol (e.g., ETHUSDT)
+    setup_key: str = ""  # Unique key for setup (e.g., ETHUSDT_5 or ETHUSDT_1)
 
     # Pattern points
     a_index: int
@@ -179,6 +180,7 @@ class KingStrategy:
                     signal_type=SignalType.LONG_KING,
                     status=SignalStatus.PENDING_FVG_RETEST,
                     symbol=self.feed.symbol,
+                    setup_key=f"{self.feed.symbol}_{self.feed.timeframe}",
                     a_index=a.index,
                     a_price=a.price,
                     c_index=c.index,
@@ -197,9 +199,14 @@ class KingStrategy:
                 )
 
                 # Only add if R:R is favorable
-                if signal.get_risk_reward() >= 1.0:
-                    signals.append(signal)
+                if signal.get_risk_reward() < 1.0:
+                    continue
 
+                # Apply 300 SMA trend filter (80% of candles must be above SMA for longs)
+                if not self.feed.check_trend_filter(a.index, f_idx, 'long', threshold=0.8):
+                    continue
+
+                signals.append(signal)
                 break  # One pattern per A point
 
         return signals
@@ -295,6 +302,7 @@ class KingStrategy:
                     signal_type=SignalType.SHORT_KING,
                     status=SignalStatus.PENDING_FVG_RETEST,
                     symbol=self.feed.symbol,
+                    setup_key=f"{self.feed.symbol}_{self.feed.timeframe}",
                     a_index=a.index,
                     a_price=a.price,
                     c_index=c.index,
@@ -312,9 +320,15 @@ class KingStrategy:
                     max_wait_candles=self.max_wait_candles
                 )
 
-                if signal.get_risk_reward() >= 1.0:
-                    signals.append(signal)
+                # Only add if R:R is favorable
+                if signal.get_risk_reward() < 1.0:
+                    continue
 
+                # Apply 300 SMA trend filter (80% of candles must be below SMA for shorts)
+                if not self.feed.check_trend_filter(a.index, f_idx, 'short', threshold=0.8):
+                    continue
+
+                signals.append(signal)
                 break
 
         return signals

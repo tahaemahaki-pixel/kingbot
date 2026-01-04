@@ -119,18 +119,18 @@ class OrderManager:
 
         return position_size
 
-    def can_open_trade(self, account_balance: float, symbol: str = None) -> tuple[bool, str]:
+    def can_open_trade(self, account_balance: float, setup_key: str = None) -> tuple[bool, str]:
         """Check if we can open a new trade based on risk rules."""
         # Check max positions (include pending orders)
         active_trades = [t for t in self.active_trades if t.status in (TradeStatus.OPEN, TradeStatus.PENDING_FILL)]
         if len(active_trades) >= self.config.max_positions:
             return False, f"Max positions ({self.config.max_positions}) reached"
 
-        # Check if we already have a trade/order for this symbol
-        if symbol:
-            existing_for_symbol = [t for t in active_trades if t.signal.symbol == symbol]
-            if existing_for_symbol:
-                return False, f"Already have active trade/order for {symbol}"
+        # Check if we already have a trade/order for this setup (symbol+timeframe)
+        if setup_key:
+            existing_for_setup = [t for t in active_trades if (t.signal.setup_key or t.signal.symbol) == setup_key]
+            if existing_for_setup:
+                return False, f"Already have active trade/order for {setup_key}"
 
         # Check daily loss limit
         max_daily_loss_amount = account_balance * self.config.max_daily_loss
@@ -145,8 +145,9 @@ class OrderManager:
             print(f"Signal not ready: {signal.status}")
             return None
 
-        # Check if we can trade (including duplicate symbol check)
-        can_trade, reason = self.can_open_trade(account_balance, signal.symbol)
+        # Check if we can trade (using setup_key for multi-timeframe support)
+        setup_key = signal.setup_key or signal.symbol
+        can_trade, reason = self.can_open_trade(account_balance, setup_key)
         if not can_trade:
             print(f"Cannot open trade: {reason}")
             return None
