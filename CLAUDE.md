@@ -254,9 +254,14 @@ bybit_bot/
 ├── CLAUDE.md                 # This file
 ├── PERFORMANCE_CLI.md        # CLI documentation
 │
+├── # Spread Trading
+├── spread_strategy.py        # MR Double Touch pattern detection for spreads
+├── spread_scanner.py         # Multi-pair dynamic cointegration scanner
+├── spread_config.py          # Spread bot configuration
+│
 ├── # Spread Trading Research
 ├── spread_analysis.py        # Cointegration analysis & z-score backtest
-├── mr_double_touch.py        # Mean-Reversion Double Touch strategy
+├── mr_double_touch.py        # Mean-Reversion Double Touch backtest
 ├── spread_double_touch.py    # Original DT on spread (doesn't work)
 └── SPREAD_TRADING_RESULTS.md # Full spread trading analysis
 ```
@@ -287,21 +292,29 @@ cd /root/kingbot                # Go to bot folder
 
 ---
 
-## Spread Trading Bot (MR Double Touch)
+## Spread Scanner Bot (Multi-Pair MR Double Touch)
 
-The spread bot trades ETH/BTC cointegration using the MR Double Touch strategy.
+The spread scanner trades multiple cointegrated pairs using the MR Double Touch strategy with dynamic cointegration checking.
+
+### Pairs Monitored
+| Pair | Assets | Mode |
+|------|--------|------|
+| ETH/BTC | ETHUSDT / BTCUSDT | 🔒 Always Active |
+| SOL/ETH | SOLUSDT / ETHUSDT | Dynamic (p < 0.05) |
+| SOL/BTC | SOLUSDT / BTCUSDT | Dynamic (p < 0.05) |
 
 ### How it Works
-1. Calculates hedge ratio from recent price data
-2. Monitors z-score of the spread (ETH - hedge_ratio * BTC)
-3. Detects MR Double Touch pattern:
+1. **Dynamic Cointegration**: Checks p-value every 500 candles (~42 hours)
+2. **Auto Enable/Disable**: Pairs activate when p < 0.05, disable when p > 0.15
+3. **ETH/BTC Always On**: Trades regardless of cointegration status
+4. **MR Double Touch Pattern**:
    - **Phase 0**: Wait for z < -2.0 or z > 2.0 (first extreme)
    - **Phase 1**: Wait for recovery (z > -1.0 or z < 1.0)
    - **Phase 2**: Wait for second touch (z < -1.5 or z > 1.5) → **ENTRY**
-4. Executes dual-leg trade (Buy ETH + Sell BTC for long spread)
-5. Exits at TP (z = ±0.5) or SL (z = ±4.0)
+5. **Dual-leg execution**: Buy one asset + Sell the other simultaneously
+6. **Exits**: TP at z = ±0.5, SL at z = ±4.0
 
-### Start Spread Bot
+### Start Spread Scanner
 
 ```bash
 cd /root/kingbot
@@ -317,11 +330,12 @@ from bot import TradingBot
 from config import BotConfig
 config = BotConfig.from_env()
 config.spread_trading_enabled = True
+config.risk_per_trade = 0.05  # 5% risk per trade
 TradingBot(config).start()
 " > spread_bot.log 2>&1 &
 ```
 
-### Monitor Spread Bot
+### Monitor Spread Scanner
 
 | Action | Command |
 |--------|---------|
@@ -330,33 +344,42 @@ TradingBot(config).start()
 | Last 50 lines | `tail -50 spread_bot.log` |
 | Stop the bot | `pkill -f TradingBot` |
 
-### Understanding Spread Bot Output
+### Understanding Scanner Output
 
 ```
-Spread Trading Stats
-========================================
-Current Z-Score: -0.02
-Pattern Phase: 0
-Active spread trades: 0
-Total spread trades: 0
-Win rate: 0.0%
-Spread P&L: $0.00
-========================================
+==================================================
+SPREAD SCANNER STATUS
+==================================================
+ETH_BTC: 🔒 ALWAYS ON p=0.4625 z=0.96 phase=1
+SOL_ETH: ❌ inactive p=0.1995
+SOL_BTC: ❌ inactive p=0.2688
+
+Next cointegration check in 450 candles
+==================================================
 ```
 
-- **Z-Score**: Current spread deviation from mean (0 = at mean)
-- **Pattern Phase**: 0=waiting, 1=first extreme seen, 2=recovery seen
-- **Active spread trades**: Currently open spread positions
+- **🔒 ALWAYS ON**: Pair trades regardless of p-value
+- **✅ ACTIVE**: Pair enabled (p < 0.05)
+- **❌ inactive**: Pair disabled (p > 0.05)
+- **z=X.XX**: Current z-score
+- **phase=N**: Pattern phase (0=waiting, 1=extreme seen, 2=recovery)
 
-### Spread Bot Parameters
+### Spread Scanner Parameters
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
+| Check Interval | 500 candles | Cointegration recheck frequency |
+| Enable Threshold | p < 0.05 | P-value to activate pair |
+| Disable Threshold | p > 0.15 | P-value to deactivate pair |
 | First Extreme | z = ±2.0 | Entry to pattern |
 | Recovery | z = ±1.0 | Partial mean reversion |
 | Second Touch | z = ±1.5 | Entry trigger |
 | Take Profit | z = ±0.5 | Close near mean |
 | Stop Loss | z = ±4.0 | Max adverse move |
+| Risk per Trade | 5% | Position sizing |
+
+### Future Improvements
+- [ ] Add max concurrent trades limit to prevent over-exposure when multiple pairs trigger
 
 ### Switch Between Bots
 
@@ -372,10 +395,10 @@ TradingBot(BotConfig.from_env()).start()
 " > bot.log 2>&1 &
 ```
 
-**To run Spread bot:**
+**To run Spread Scanner bot:**
 ```bash
 pkill -f TradingBot
-# Use the spread bot start command above
+# Use the spread scanner start command above
 ```
 
 ---

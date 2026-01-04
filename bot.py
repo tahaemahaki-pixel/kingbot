@@ -45,11 +45,11 @@ class TradingBot:
 
         # Spread trading mode
         self.spread_mode = config.spread_trading_enabled
-        self.spread_strategy = None
-        self.spread_feed_a = None  # ETH feed
-        self.spread_feed_b = None  # BTC feed
-        self.last_candle_a = None
-        self.last_candle_b = None
+        self.spread_scanner = None  # Multi-pair scanner
+        self.last_candles: Dict[str, Candle] = {}  # Last candle per symbol
+
+        # Spread symbols to monitor
+        self.spread_symbols = ["ETHUSDT", "BTCUSDT", "SOLUSDT"]
 
         if not self.spread_mode:
             # Normal mode: trade multiple symbols
@@ -61,10 +61,9 @@ class TradingBot:
                     for tf in EXTRA_TIMEFRAMES[symbol]:
                         self.setups.append((symbol, tf))
         else:
-            # Spread mode: only trade the spread pair
-            pair = config.spread_pair
-            self.setups.append((pair.asset_a, config.timeframe))
-            self.setups.append((pair.asset_b, config.timeframe))
+            # Spread mode: load all spread symbols
+            for symbol in self.spread_symbols:
+                self.setups.append((symbol, config.timeframe))
 
         # Per-setup components (keyed by "SYMBOL_TIMEFRAME")
         self.feeds: Dict[str, DataFeed] = {}
@@ -90,11 +89,13 @@ class TradingBot:
         """Start the trading bot."""
         print("=" * 60)
         if self.spread_mode:
-            print("SPREAD TRADING BOT - MR Double Touch")
+            print("SPREAD SCANNER BOT - Multi-Pair MR Double Touch")
             print("=" * 60)
+            print(f"Mode: DYNAMIC SPREAD TRADING")
+            print(f"Pairs: ETH/BTC, SOL/ETH, SOL/BTC")
+            print(f"Cointegration check: every 500 candles")
+            print(f"P-value threshold: < 0.05 to enable")
             pair = self.config.spread_pair
-            print(f"Mode: SPREAD TRADING")
-            print(f"Pair: {pair.asset_a} / {pair.asset_b}")
             print(f"Pattern: z={pair.first_extreme_z} -> z={pair.recovery_z} -> z={pair.second_touch_z}")
             print(f"TP: z={pair.tp_z}, SL: z={pair.sl_z}")
         else:
@@ -272,57 +273,65 @@ class TradingBot:
             self.candles_since_scan[setup_key] = 0
 
     def _on_new_candle_spread(self, setup_key: str, candle: Candle, timestamp: str):
-        """Handle new candle in spread trading mode."""
-        if not self.spread_strategy:
+        """Handle new candle in spread trading mode (multi-pair)."""
+        if not self.spread_scanner:
             return
 
-        pair = self.config.spread_pair
-        key_a = make_setup_key(pair.asset_a, self.config.timeframe)
-        key_b = make_setup_key(pair.asset_b, self.config.timeframe)
+        # Extract symbol from setup_key
+        symbol = setup_key.rsplit("_", 1)[0]
 
-        # Store latest candles
-        if setup_key == key_a:
-            self.last_candle_a = candle
-        elif setup_key == key_b:
-            self.last_candle_b = candle
+        # Store latest candle for this symbol
+        self.last_candles[symbol] = candle
 
-        # Wait until we have both candles with matching timestamps
-        if not self.last_candle_a or not self.last_candle_b:
-            return
-        if self.last_candle_a.time != self.last_candle_b.time:
+        # Check if we have all symbols with matching timestamps
+        if len(self.last_candles) < len(self.spread_symbols):
             return
 
-        # Update spread strategy with aligned candles
-        signal = self.spread_strategy.update(self.last_candle_a, self.last_candle_b)
+        # Check all timestamps match
+        times = [c.time for c in self.last_candles.values()]
+        if len(set(times)) != 1:
+            return  # Not all aligned yet
 
-        # Check spread exits
-        current_z = self.spread_strategy.get_current_zscore()
-        self.order_manager.check_spread_exits(current_z)
+        # Periodic cointegration check
+        self.spread_scanner.check_periodic_cointegration()
 
-        # Execute new signal if found
-        if signal:
-            from spread_strategy import SpreadSignalStatus
-            print(f"[{timestamp}] Spread signal detected!")
-            print(f"  Type: {signal.signal_type.value}")
-            print(f"  Entry Z: {signal.entry_z:.2f}")
-            print(f"  Pattern: {signal.first_extreme_z:.2f} -> {signal.recovery_z:.2f} -> {signal.entry_z:.2f}")
+        # Process each active pair
+        for pair in self.spread_scanner.get_active_pairs():
+            candle_a = self.last_candles.get(pair.asset_a)
+            candle_b = self.last_candles.get(pair.asset_b)
 
-            self._update_account_balance()
-            trade = self.order_manager.execute_spread_signal(signal, self.account_balance)
-            if trade:
-                self.spread_strategy.add_signal(signal)
+            if not candle_a or not candle_b:
+                continue
 
-        # Clear the candles after processing
-        self.last_candle_a = None
-        self.last_candle_b = None
+            # Update pair strategy
+            signal = self.spread_scanner.update(candle_a, candle_b, pair.name)
+
+            # Check exits for this pair's z-score
+            if pair.strategy:
+                current_z = pair.strategy.get_current_zscore()
+                self.order_manager.check_spread_exits(current_z)
+
+            # Execute new signal if found
+            if signal:
+                print(f"[{timestamp}] {pair.name} Spread signal detected!")
+                print(f"  Type: {signal.signal_type.value}")
+                print(f"  Entry Z: {signal.entry_z:.2f}")
+                print(f"  Pattern: {signal.first_extreme_z:.2f} -> {signal.recovery_z:.2f} -> {signal.entry_z:.2f}")
+
+                self._update_account_balance()
+                trade = self.order_manager.execute_spread_signal(signal, self.account_balance)
+                if trade:
+                    pair.strategy.add_signal(signal)
+
+        # Clear candles after processing
+        self.last_candles.clear()
 
     def _scan_all_patterns(self):
         """Scan for patterns across all setups."""
         if self.spread_mode:
-            # In spread mode, patterns are detected real-time via z-score
-            stats = self.spread_strategy.get_stats() if self.spread_strategy else {}
-            print(f"Spread mode - monitoring z-score: {stats.get('current_zscore', 0):.2f}")
-            print(f"Pattern phase: {stats.get('pattern_phase', 0)}")
+            # In spread mode, show scanner status
+            if self.spread_scanner:
+                self.spread_scanner.print_status()
             return
 
         total_signals = 0
@@ -375,33 +384,31 @@ class TradingBot:
             print(f"Balance update error: {e}")
 
     def _init_spread_strategy(self):
-        """Initialize spread strategy with both asset feeds."""
-        from spread_strategy import SpreadStrategy
+        """Initialize spread scanner with all pair feeds."""
+        from spread_scanner import SpreadScanner
 
-        pair = self.config.spread_pair
-        key_a = make_setup_key(pair.asset_a, self.config.timeframe)
-        key_b = make_setup_key(pair.asset_b, self.config.timeframe)
+        # Check all required feeds exist
+        missing = []
+        for symbol in self.spread_symbols:
+            key = make_setup_key(symbol, self.config.timeframe)
+            if key not in self.feeds:
+                missing.append(symbol)
 
-        if key_a not in self.feeds or key_b not in self.feeds:
-            print(f"ERROR: Missing feeds for spread strategy")
-            print(f"  Feed A ({pair.asset_a}): {'✓' if key_a in self.feeds else '✗'}")
-            print(f"  Feed B ({pair.asset_b}): {'✓' if key_b in self.feeds else '✗'}")
+        if missing:
+            print(f"ERROR: Missing feeds for spread scanner: {missing}")
             return
 
-        self.spread_feed_a = self.feeds[key_a]
-        self.spread_feed_b = self.feeds[key_b]
-
-        self.spread_strategy = SpreadStrategy(
-            self.config,
-            self.spread_feed_a,
-            self.spread_feed_b
+        # Create the multi-pair scanner
+        self.spread_scanner = SpreadScanner(
+            config=self.config,
+            feeds=self.feeds,
+            check_interval=500,      # Check cointegration every 500 candles (~42 hours)
+            p_threshold=0.05,        # Enable trading when p < 0.05
+            p_disable_threshold=0.15 # Disable trading when p > 0.15
         )
 
-        stats = self.spread_strategy.get_stats()
-        print(f"\nSpread Strategy Initialized:")
-        print(f"  Hedge Ratio: {stats.get('hedge_ratio', 0):.6f}")
-        print(f"  Current Z-Score: {stats.get('current_zscore', 0):.2f}")
-        print(f"  History Length: {stats.get('history_length', 0)} candles")
+        # Print initial status
+        self.spread_scanner.print_status()
 
     def _record_equity_snapshot(self):
         """Record equity snapshot for performance tracking."""
@@ -543,18 +550,27 @@ class TradingBot:
         print("\n" + "=" * 40)
 
         if self.spread_mode:
-            # Spread trading stats
+            # Spread scanner stats
             stats = self.order_manager.get_spread_stats()
-            spread_stats = self.spread_strategy.get_stats() if self.spread_strategy else {}
 
-            print("Spread Trading Stats")
+            print("Spread Scanner Stats")
             print("=" * 40)
-            print(f"Current Z-Score: {spread_stats.get('current_zscore', 0):.2f}")
-            print(f"Pattern Phase: {spread_stats.get('pattern_phase', 0)}")
-            print(f"Active spread trades: {stats.get('active_spread_trades', 0)}")
-            print(f"Total spread trades: {stats.get('total_spread_trades', 0)}")
+
+            if self.spread_scanner:
+                scanner_stats = self.spread_scanner.get_stats()
+                print(f"Active pairs: {scanner_stats['active_pairs']}/{scanner_stats['total_pairs']}")
+
+                for name, pair_stats in scanner_stats['pairs'].items():
+                    status = "✅" if pair_stats['cointegrated'] else "❌"
+                    z = f"z={pair_stats['zscore']:.2f}" if pair_stats['cointegrated'] else ""
+                    print(f"  {name}: {status} p={pair_stats['p_value']:.3f} {z}")
+
+                print(f"Next coint check: {scanner_stats['candles_until_check']} candles")
+
+            print(f"Active trades: {stats.get('active_spread_trades', 0)}")
+            print(f"Total trades: {stats.get('total_spread_trades', 0)}")
             print(f"Win rate: {stats.get('spread_win_rate', 0) * 100:.1f}%")
-            print(f"Spread P&L: ${stats.get('spread_pnl', 0):.2f}")
+            print(f"P&L: ${stats.get('spread_pnl', 0):.2f}")
         else:
             # Normal trading stats
             stats = self.order_manager.get_stats()

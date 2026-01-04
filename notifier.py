@@ -140,11 +140,12 @@ class TelegramNotifier:
         """Notify when bot starts."""
         if spread_mode:
             msg = f"""
-🤖 <b>SPREAD BOT STARTED</b>
+🤖 <b>SPREAD SCANNER STARTED</b>
 
-<b>Pair:</b> ETH/BTC
+<b>Pairs:</b> ETH/BTC, SOL/ETH, SOL/BTC
 <b>Balance:</b> ${balance:.2f}
-<b>Status:</b> Monitoring z-score for MR Double Touch...
+<b>Mode:</b> Dynamic cointegration scanning
+<b>Status:</b> Monitoring z-scores for MR Double Touch...
 """
         else:
             msg = f"""
