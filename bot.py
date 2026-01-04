@@ -93,7 +93,7 @@ class TradingBot:
             setup_key = make_setup_key(symbol, timeframe)
             try:
                 feed = DataFeed(self.config, self.client, symbol, timeframe=timeframe)
-                feed.load_historical(200)
+                feed.load_historical(500)
 
                 strategy = DoubleTouchStrategy(
                     feed,
