@@ -151,12 +151,12 @@ class SpreadScanner:
                 if not pair.is_cointegrated:
                     pair.is_cointegrated = True
                     pair.strategy = self._create_strategy(pair)
-                    print(f"  {name}: ALWAYS ACTIVE (p={p_val:.4f}, hedge={hedge:.6f})")
+                    print(f"  {name}: ALWAYS ACTIVE (p={p_val:.4f}, hedge={pair.hedge_ratio:.6f})")
                 else:
-                    # Update hedge ratio
-                    if pair.strategy:
-                        pair.strategy.hedge_ratio = hedge
-                    print(f"  {name}: ALWAYS ACTIVE (p={p_val:.4f}, hedge={hedge:.6f})")
+                    # Don't update hedge ratio on running strategy - it would break z-score
+                    # Just report current p-value for informational purposes
+                    actual_hedge = pair.strategy.hedge_ratio if pair.strategy else pair.hedge_ratio
+                    print(f"  {name}: ALWAYS ACTIVE (p={p_val:.4f}, hedge={actual_hedge:.6f})")
                 continue
 
             # Dynamic pairs use cointegration threshold
@@ -172,10 +172,9 @@ class SpreadScanner:
                 pair.strategy = None
                 print(f"  {name}: DISABLED (p={p_val:.4f})")
             elif pair.is_cointegrated:
-                # Still cointegrated, update hedge ratio
-                if pair.strategy:
-                    pair.strategy.hedge_ratio = hedge
-                print(f"  {name}: ACTIVE (p={p_val:.4f}, hedge={hedge:.6f})")
+                # Still cointegrated - don't update hedge ratio on running strategy
+                actual_hedge = pair.strategy.hedge_ratio if pair.strategy else pair.hedge_ratio
+                print(f"  {name}: ACTIVE (p={p_val:.4f}, hedge={actual_hedge:.6f})")
             else:
                 print(f"  {name}: inactive (p={p_val:.4f})")
 
@@ -215,7 +214,10 @@ class SpreadScanner:
             self.feeds[key_a],
             self.feeds[key_b]
         )
-        strategy.hedge_ratio = pair.hedge_ratio
+        # Use the strategy's calculated hedge ratio (from OLS regression)
+        # instead of overwriting with scanner's covariance-based ratio
+        # This ensures consistency between spread_history and future updates
+        pair.hedge_ratio = strategy.hedge_ratio
 
         return strategy
 
