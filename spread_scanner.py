@@ -56,7 +56,7 @@ class SpreadScanner:
         self,
         config: BotConfig,
         feeds: Dict[str, DataFeed],
-        check_interval: int = 500,       # Candles between cointegration checks
+        check_interval: int = 20,         # Candles between cointegration checks (~1.7h)
         p_threshold: float = 0.05,        # Max p-value to enable trading
         p_disable_threshold: float = 0.15 # P-value to disable trading
     ):
@@ -104,7 +104,7 @@ class SpreadScanner:
         feed_a = self.feeds[key_a]
         feed_b = self.feeds[key_b]
 
-        if len(feed_a.candles) < 200 or len(feed_b.candles) < 200:
+        if len(feed_a.candles) < 60 or len(feed_b.candles) < 60:
             return False, 1.0, 0.0
 
         # Align candles by time
@@ -112,11 +112,11 @@ class SpreadScanner:
         times_b = {c.time: c.close for c in feed_b.candles}
 
         common_times = sorted(set(times_a.keys()) & set(times_b.keys()))
-        if len(common_times) < 200:
+        if len(common_times) < 60:
             return False, 1.0, 0.0
 
-        # Get last 500 aligned prices (or all if less)
-        use_times = common_times[-500:]
+        # Get last 60 aligned prices (~5 hours) for cointegration test
+        use_times = common_times[-60:]
         prices_a = np.array([times_a[t] for t in use_times])
         prices_b = np.array([times_b[t] for t in use_times])
 
@@ -168,10 +168,16 @@ class SpreadScanner:
                 pair.strategy = self._create_strategy(pair)
                 print(f"  {name}: ENABLED (p={p_val:.4f}, hedge={hedge:.6f})")
             elif not is_coint and pair.is_cointegrated and p_val > self.p_disable_threshold:
-                # Disable trading (only if p exceeds higher threshold)
-                pair.is_cointegrated = False
-                pair.strategy = None
-                print(f"  {name}: DISABLED (p={p_val:.4f})")
+                # Check if there's an active pattern - don't disable mid-pattern
+                has_active_pattern = (pair.strategy and
+                    pair.strategy.pattern_state.get('phase', 0) > 0)
+                if has_active_pattern:
+                    print(f"  {name}: PATTERN ACTIVE (p={p_val:.4f}) - keeping open")
+                else:
+                    # Disable trading (only if p exceeds higher threshold and no active pattern)
+                    pair.is_cointegrated = False
+                    pair.strategy = None
+                    print(f"  {name}: DISABLED (p={p_val:.4f})")
             elif pair.is_cointegrated:
                 # Still cointegrated - don't update hedge ratio on running strategy
                 actual_hedge = pair.strategy.hedge_ratio if pair.strategy else pair.hedge_ratio

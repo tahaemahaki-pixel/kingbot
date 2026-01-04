@@ -402,7 +402,7 @@ class TradingBot:
         self.spread_scanner = SpreadScanner(
             config=self.config,
             feeds=self.feeds,
-            check_interval=500,      # Check cointegration every 500 candles (~42 hours)
+            check_interval=20,       # Check cointegration every 20 candles (~1.7 hours)
             p_threshold=0.05,        # Enable trading when p < 0.05
             p_disable_threshold=0.15 # Disable trading when p > 0.15
         )
