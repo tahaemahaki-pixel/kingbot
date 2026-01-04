@@ -40,7 +40,7 @@ This split approach was determined by comparing both methods across multiple ass
 | EVWMA Length | 20 | Ribbon calculation period |
 | Ribbon Buffer | 2% | "Into ribbon" tolerance |
 | FVG Max Wait | 20 candles | Max bars to wait for FVG retest |
-| Min R:R | 1.0 | Minimum risk-reward to take trade |
+| Min R:R | 1.5 | Minimum risk-reward to take trade |
 
 **Swing Lookback Testing (SPY):**
 | Lookback | Swings | Trades | Win Rate | Return |
@@ -198,13 +198,15 @@ kill 12345
 
 ## What the Bot Does
 
-1. **Scans 20 top coins** every 5 minutes:
-   - BTC, ETH, SOL, XRP, DOGE, ADA, AVAX, LINK, DOT, SUI
-   - LTC, BCH, ATOM, UNI, APT, ARB, OP, NEAR, FIL, INJ
+1. **Scans 21 setups** across multiple timeframes:
+   - 20 coins on 5-minute: BTC, ETH, SOL, XRP, DOGE, ADA, AVAX, LINK, DOT, SUI, LTC, BCH, ATOM, UNI, APT, ARB, OP, NEAR, FIL, INJ
+   - ETH also on 1-minute (can trade independently from 5m)
 
 2. **Looks for "King" patterns** (special price patterns that predict reversals)
 
-3. **Applies trend filter** (300 SMA - 80% of candles must align with trade direction)
+3. **Applies filters**:
+   - Minimum R:R of 1.5 (reward must be at least 1.5x the risk)
+   - 300 SMA trend filter (80% of candles must align with trade direction)
 
 4. **Waits for FVG retest** (price must come back to a specific zone)
 
@@ -366,11 +368,15 @@ systemctl restart kingbot       # Restart bot
   - 5-minute candles (all 20 coins)
   - 1-minute candles (ETH only)
 - **Total setups**: 21 (20 coins @ 5m + ETH @ 1m)
-- **Trend Filter**: 300 SMA (80% threshold)
+- **Multi-TF Independence**: Same symbol can trade on different timeframes simultaneously (e.g., ETH 5m and ETH 1m can both have open positions)
+- **Filters**:
+  - Min R:R: 1.5 (only takes trades with reward ≥ 1.5x risk)
+  - 300 SMA Trend Filter (80% threshold)
 - **Risk per trade**: 1%
 - **Max positions**: 3 at a time
 - **Leverage**: Max per symbol (BTC/ETH: 100x, most alts: 50x)
 - **Entry buffer**: 0.03% above/below FVG midpoint
+- **SL/TP Preservation**: On restart, only pending entry orders are cancelled - SL/TP orders protecting open positions are preserved
 - **VPS**: DigitalOcean (209.38.84.47)
 
 ---
