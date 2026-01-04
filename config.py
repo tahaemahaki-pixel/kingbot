@@ -57,6 +57,26 @@ EXTRA_TIMEFRAMES = {
 
 
 @dataclass
+class SpreadPairConfig:
+    """Configuration for a spread trading pair."""
+    name: str = "ETH_BTC"
+    asset_a: str = "ETHUSDT"      # Long leg (buy for long spread)
+    asset_b: str = "BTCUSDT"      # Short leg (sell for long spread)
+    hedge_ratio: float = 0.054    # Recalculated on startup
+    zscore_window: int = 60       # Rolling window for z-score
+
+    # MR Double Touch parameters
+    first_extreme_z: float = 2.0
+    recovery_z: float = 1.0
+    second_touch_z: float = 1.5
+    max_pattern_bars: int = 50
+
+    # Exit parameters
+    tp_z: float = 0.5
+    sl_z: float = 4.0
+
+
+@dataclass
 class BotConfig:
     # API Configuration
     api_key: str = ""
@@ -68,9 +88,15 @@ class BotConfig:
     category: str = "linear"  # linear = USDT perpetual
     timeframe: str = "5"  # 5 minute candles
 
+    # ==================== SPREAD TRADING ====================
+    spread_trading_enabled: bool = False  # Enable spread trading mode
+    spread_pair: SpreadPairConfig = None  # Spread pair config
+
     def __post_init__(self):
         if self.symbols is None:
             self.symbols = DEFAULT_SYMBOLS.copy()
+        if self.spread_pair is None:
+            self.spread_pair = SpreadPairConfig()
 
     # Risk Management
     risk_per_trade: float = 0.01  # 1% risk per trade
@@ -110,6 +136,19 @@ class BotConfig:
         symbols_env = os.getenv("TRADING_SYMBOLS", "")
         symbols = [s.strip() for s in symbols_env.split(",") if s.strip()] if symbols_env else None
 
+        # Spread trading config
+        spread_enabled = os.getenv("SPREAD_TRADING_ENABLED", "false").lower() == "true"
+        spread_pair = SpreadPairConfig(
+            name=os.getenv("SPREAD_PAIR_NAME", "ETH_BTC"),
+            asset_a=os.getenv("SPREAD_ASSET_A", "ETHUSDT"),
+            asset_b=os.getenv("SPREAD_ASSET_B", "BTCUSDT"),
+            first_extreme_z=float(os.getenv("SPREAD_FIRST_EXTREME_Z", "2.0")),
+            recovery_z=float(os.getenv("SPREAD_RECOVERY_Z", "1.0")),
+            second_touch_z=float(os.getenv("SPREAD_SECOND_TOUCH_Z", "1.5")),
+            tp_z=float(os.getenv("SPREAD_TP_Z", "0.5")),
+            sl_z=float(os.getenv("SPREAD_SL_Z", "4.0")),
+        )
+
         return cls(
             api_key=os.getenv("BYBIT_API_KEY", ""),
             api_secret=os.getenv("BYBIT_API_SECRET", ""),
@@ -117,6 +156,8 @@ class BotConfig:
             symbols=symbols,
             timeframe=os.getenv("TRADING_TIMEFRAME", "5"),
             risk_per_trade=float(os.getenv("RISK_PER_TRADE", "0.01")),
+            spread_trading_enabled=spread_enabled,
+            spread_pair=spread_pair,
             telegram_token=os.getenv("TELEGRAM_TOKEN"),
             telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID"),
         )

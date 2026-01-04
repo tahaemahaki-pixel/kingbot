@@ -1,5 +1,6 @@
 """
 Order Manager - Handles order execution, SL/TP, and position tracking
+Supports both single-asset Double Touch and dual-leg spread trading.
 """
 import time
 from dataclasses import dataclass, field
@@ -41,6 +42,32 @@ class Trade:
     exit_reason: Optional[str] = None
 
 
+@dataclass
+class SpreadTrade:
+    """Tracks a spread trade (two legs)."""
+    signal: any  # SpreadSignal (imported dynamically to avoid circular import)
+    status: TradeStatus = TradeStatus.PENDING
+
+    # Leg A (e.g., ETH) - Long for long_spread, Short for short_spread
+    leg_a_order_id: Optional[str] = None
+    leg_a_filled_price: Optional[float] = None
+    leg_a_size: float = 0.0
+    leg_a_symbol: str = ""
+
+    # Leg B (e.g., BTC) - Short for long_spread, Long for short_spread
+    leg_b_order_id: Optional[str] = None
+    leg_b_filled_price: Optional[float] = None
+    leg_b_size: float = 0.0
+    leg_b_symbol: str = ""
+
+    # Timing
+    opened_at: float = 0.0
+
+    # P&L tracking (combined)
+    realized_pnl: float = 0.0
+    exit_reason: Optional[str] = None
+
+
 class OrderManager:
     """Manages order execution and position lifecycle."""
 
@@ -75,6 +102,10 @@ class OrderManager:
         self.active_trades: List[Trade] = []
         self.closed_trades: List[Trade] = []
         self.daily_pnl: float = 0.0
+
+        # Spread trading
+        self.active_spread_trades: List[SpreadTrade] = []
+        self.closed_spread_trades: List[SpreadTrade] = []
 
         # Performance tracking
         self.tracker = get_tracker()
@@ -543,3 +574,229 @@ class OrderManager:
     def reset_daily_stats(self):
         """Reset daily statistics (call at start of new day)."""
         self.daily_pnl = 0.0
+
+    # ==================== SPREAD TRADING ====================
+
+    def execute_spread_signal(self, signal, account_balance: float) -> Optional[SpreadTrade]:
+        """
+        Execute a spread trading signal (two legs).
+
+        For LONG_SPREAD: Buy asset_a (ETH), Sell asset_b (BTC)
+        For SHORT_SPREAD: Sell asset_a (ETH), Buy asset_b (BTC)
+        """
+        from spread_strategy import SpreadSignalType, SpreadSignalStatus
+
+        if signal.status != SpreadSignalStatus.READY:
+            print(f"Spread signal not ready: {signal.status}")
+            return None
+
+        # Check if we can trade
+        if self.active_spread_trades:
+            print("Already have active spread trade")
+            return None
+
+        # Calculate position sizes based on risk
+        # Risk = 2% of account, split between legs based on hedge ratio
+        risk_amount = account_balance * self.config.risk_per_trade
+
+        # Position value for each leg (simplified: equal dollar exposure)
+        leg_value = risk_amount * 10  # 10x the risk amount for position size
+
+        # Calculate quantities
+        asset_a = self.config.spread_pair.asset_a  # e.g., ETHUSDT
+        asset_b = self.config.spread_pair.asset_b  # e.g., BTCUSDT
+
+        qty_a = leg_value / signal.asset_a_price
+        qty_b = (leg_value * signal.hedge_ratio) / signal.asset_b_price
+
+        qty_a = self._round_qty(asset_a, qty_a, signal.asset_a_price)
+        qty_b = self._round_qty(asset_b, qty_b, signal.asset_b_price)
+
+        # Determine sides
+        is_long_spread = signal.signal_type == SpreadSignalType.LONG_SPREAD
+        side_a = "Buy" if is_long_spread else "Sell"
+        side_b = "Sell" if is_long_spread else "Buy"
+
+        try:
+            # Execute both legs (market orders for speed)
+            order_a = self.client.place_order(
+                symbol=asset_a,
+                side=side_a,
+                qty=qty_a,
+                order_type="Market"
+            )
+
+            order_b = self.client.place_order(
+                symbol=asset_b,
+                side=side_b,
+                qty=qty_b,
+                order_type="Market"
+            )
+
+            # Create spread trade record
+            spread_trade = SpreadTrade(
+                signal=signal,
+                status=TradeStatus.OPEN,
+                leg_a_order_id=order_a.order_id,
+                leg_a_filled_price=signal.asset_a_price,
+                leg_a_size=qty_a,
+                leg_a_symbol=asset_a,
+                leg_b_order_id=order_b.order_id,
+                leg_b_filled_price=signal.asset_b_price,
+                leg_b_size=qty_b,
+                leg_b_symbol=asset_b,
+                opened_at=time.time()
+            )
+
+            self.active_spread_trades.append(spread_trade)
+            signal.status = SpreadSignalStatus.FILLED
+
+            direction = "LONG" if is_long_spread else "SHORT"
+            print(f"Spread trade opened: {direction}")
+            print(f"  Leg A: {side_a} {qty_a} {asset_a} @ {signal.asset_a_price:.2f}")
+            print(f"  Leg B: {side_b} {qty_b} {asset_b} @ {signal.asset_b_price:.2f}")
+            print(f"  Entry Z: {signal.entry_z:.2f}")
+
+            # Notify
+            if self.notifier:
+                self.notifier.send_message(
+                    f"🔄 SPREAD TRADE OPENED\n"
+                    f"Direction: {direction}\n"
+                    f"Entry Z: {signal.entry_z:.2f}\n"
+                    f"Leg A: {side_a} {qty_a:.4f} {asset_a}\n"
+                    f"Leg B: {side_b} {qty_b:.6f} {asset_b}\n"
+                    f"TP Z: {signal.tp_z}, SL Z: {signal.sl_z}"
+                )
+
+            return spread_trade
+
+        except Exception as e:
+            print(f"Spread order execution failed: {e}")
+            # TODO: Handle partial fills (close the leg that filled)
+            return None
+
+    def check_spread_exits(self, current_zscore: float):
+        """Check if any spread trades should be closed based on z-score."""
+        from spread_strategy import SpreadSignalType
+
+        for trade in self.active_spread_trades[:]:
+            if trade.status != TradeStatus.OPEN:
+                continue
+
+            signal = trade.signal
+            is_long = signal.signal_type == SpreadSignalType.LONG_SPREAD
+
+            should_close = False
+            exit_reason = None
+
+            if is_long:
+                # TP: z rises to -tp_z (closer to 0)
+                if current_zscore >= -signal.tp_z:
+                    should_close = True
+                    exit_reason = "take_profit"
+                # SL: z drops below -sl_z
+                elif current_zscore < -signal.sl_z:
+                    should_close = True
+                    exit_reason = "stop_loss"
+            else:
+                # TP: z drops to +tp_z
+                if current_zscore <= signal.tp_z:
+                    should_close = True
+                    exit_reason = "take_profit"
+                # SL: z rises above +sl_z
+                elif current_zscore > signal.sl_z:
+                    should_close = True
+                    exit_reason = "stop_loss"
+
+            if should_close:
+                self.close_spread_trade(trade, exit_reason, current_zscore)
+
+    def close_spread_trade(self, trade: SpreadTrade, reason: str, exit_zscore: float = None):
+        """Close a spread trade (both legs)."""
+        from spread_strategy import SpreadSignalType
+
+        if trade.status != TradeStatus.OPEN:
+            return
+
+        signal = trade.signal
+        is_long = signal.signal_type == SpreadSignalType.LONG_SPREAD
+
+        # Close sides (opposite of entry)
+        close_side_a = "Sell" if is_long else "Buy"
+        close_side_b = "Buy" if is_long else "Sell"
+
+        try:
+            # Close leg A
+            self.client.place_order(
+                symbol=trade.leg_a_symbol,
+                side=close_side_a,
+                qty=trade.leg_a_size,
+                order_type="Market",
+                reduce_only=True
+            )
+
+            # Close leg B
+            self.client.place_order(
+                symbol=trade.leg_b_symbol,
+                side=close_side_b,
+                qty=trade.leg_b_size,
+                order_type="Market",
+                reduce_only=True
+            )
+
+            # Calculate approximate P&L
+            # For proper P&L, we'd need to fetch actual fill prices
+            # This is a rough estimate based on z-score movement
+            z_move = abs(signal.entry_z) - abs(exit_zscore or 0)
+            # Rough P&L estimate (would need refinement with actual prices)
+            trade.realized_pnl = z_move * 100  # Placeholder
+
+            if reason == "take_profit":
+                trade.status = TradeStatus.CLOSED_TP
+            elif reason == "stop_loss":
+                trade.status = TradeStatus.CLOSED_SL
+            else:
+                trade.status = TradeStatus.CLOSED_MANUAL
+
+            trade.exit_reason = reason
+            self.daily_pnl += trade.realized_pnl
+
+            # Move to closed trades
+            self.active_spread_trades.remove(trade)
+            self.closed_spread_trades.append(trade)
+
+            print(f"Spread trade closed: {reason}")
+            print(f"  Exit Z: {exit_zscore:.2f}" if exit_zscore else "")
+
+            # Notify
+            if self.notifier:
+                emoji = "✅" if reason == "take_profit" else "❌"
+                self.notifier.send_message(
+                    f"{emoji} SPREAD TRADE CLOSED\n"
+                    f"Reason: {reason}\n"
+                    f"Exit Z: {exit_zscore:.2f}" if exit_zscore else ""
+                )
+
+        except Exception as e:
+            print(f"Spread trade close failed: {e}")
+
+    def close_all_spread_trades(self, reason: str = "shutdown"):
+        """Close all open spread trades."""
+        for trade in self.active_spread_trades[:]:
+            if trade.status == TradeStatus.OPEN:
+                self.close_spread_trade(trade, reason)
+
+    def get_spread_stats(self) -> Dict:
+        """Get spread trading statistics."""
+        total = len(self.closed_spread_trades)
+        winners = [t for t in self.closed_spread_trades if t.realized_pnl > 0]
+        losers = [t for t in self.closed_spread_trades if t.realized_pnl <= 0]
+
+        return {
+            "total_spread_trades": total,
+            "spread_winners": len(winners),
+            "spread_losers": len(losers),
+            "spread_win_rate": len(winners) / total if total > 0 else 0,
+            "spread_pnl": sum(t.realized_pnl for t in self.closed_spread_trades),
+            "active_spread_trades": len(self.active_spread_trades)
+        }

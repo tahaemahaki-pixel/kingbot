@@ -4,6 +4,20 @@ A crypto trading bot that scans multiple coins on Bybit for "Double Touch" patte
 
 ---
 
+## Project Priorities
+
+### Spread Trading - MR Double Touch Strategy
+We successfully adapted the Double Touch strategy for **pairs/spread trading** on cointegrated assets.
+
+- **Status:** Backtested & Ready (`mr_double_touch.py`)
+- **Pair Tested:** BTC/ETH spread (cointegrated, p=0.001)
+- **Results:** 88.2% win rate, 4.90 profit factor, 61.4% return
+- **Reference:** See `SPREAD_TRADING_RESULTS.md` for full analysis
+
+**Key Finding:** Original Double Touch doesn't work on mean-reverting spreads (EMA ribbon too slow). We created **Mean-Reversion Double Touch** - same concept, inverted logic.
+
+---
+
 ## Strategy Overview
 
 ### Double Touch Pattern
@@ -233,9 +247,18 @@ bybit_bot/
 ├── order_manager.py          # Trade execution
 ├── notifier.py               # Telegram alerts
 ├── start.py                  # Entry point
+├── trade_tracker.py          # Performance tracking (SQLite)
+├── performance_cli.py        # CLI for stats/trades/equity
 ├── .env                      # API keys (secret!)
 ├── bot.log                   # Bot logs
-└── CLAUDE.md                 # This file
+├── CLAUDE.md                 # This file
+├── PERFORMANCE_CLI.md        # CLI documentation
+│
+├── # Spread Trading Research
+├── spread_analysis.py        # Cointegration analysis & z-score backtest
+├── mr_double_touch.py        # Mean-Reversion Double Touch strategy
+├── spread_double_touch.py    # Original DT on spread (doesn't work)
+└── SPREAD_TRADING_RESULTS.md # Full spread trading analysis
 ```
 
 ---
@@ -259,8 +282,100 @@ bybit_bot/
 
 ```bash
 ssh root@209.38.84.47           # Connect to VPS
-journalctl -u doubletouchbot -f # View live logs
-systemctl restart doubletouchbot # Restart bot
+cd /root/kingbot                # Go to bot folder
+```
+
+---
+
+## Spread Trading Bot (MR Double Touch)
+
+The spread bot trades ETH/BTC cointegration using the MR Double Touch strategy.
+
+### How it Works
+1. Calculates hedge ratio from recent price data
+2. Monitors z-score of the spread (ETH - hedge_ratio * BTC)
+3. Detects MR Double Touch pattern:
+   - **Phase 0**: Wait for z < -2.0 or z > 2.0 (first extreme)
+   - **Phase 1**: Wait for recovery (z > -1.0 or z < 1.0)
+   - **Phase 2**: Wait for second touch (z < -1.5 or z > 1.5) → **ENTRY**
+4. Executes dual-leg trade (Buy ETH + Sell BTC for long spread)
+5. Exits at TP (z = ±0.5) or SL (z = ±4.0)
+
+### Start Spread Bot
+
+```bash
+cd /root/kingbot
+pkill -f TradingBot  # Stop any existing bot first
+
+nohup python3 -u -c "
+import os
+os.environ['SPREAD_TRADING_ENABLED'] = 'true'
+from dotenv import load_dotenv
+load_dotenv()
+os.environ['SPREAD_TRADING_ENABLED'] = 'true'
+from bot import TradingBot
+from config import BotConfig
+config = BotConfig.from_env()
+config.spread_trading_enabled = True
+TradingBot(config).start()
+" > spread_bot.log 2>&1 &
+```
+
+### Monitor Spread Bot
+
+| Action | Command |
+|--------|---------|
+| Check if running | `pgrep -f TradingBot` |
+| Watch live | `tail -f spread_bot.log` |
+| Last 50 lines | `tail -50 spread_bot.log` |
+| Stop the bot | `pkill -f TradingBot` |
+
+### Understanding Spread Bot Output
+
+```
+Spread Trading Stats
+========================================
+Current Z-Score: -0.02
+Pattern Phase: 0
+Active spread trades: 0
+Total spread trades: 0
+Win rate: 0.0%
+Spread P&L: $0.00
+========================================
+```
+
+- **Z-Score**: Current spread deviation from mean (0 = at mean)
+- **Pattern Phase**: 0=waiting, 1=first extreme seen, 2=recovery seen
+- **Active spread trades**: Currently open spread positions
+
+### Spread Bot Parameters
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| First Extreme | z = ±2.0 | Entry to pattern |
+| Recovery | z = ±1.0 | Partial mean reversion |
+| Second Touch | z = ±1.5 | Entry trigger |
+| Take Profit | z = ±0.5 | Close near mean |
+| Stop Loss | z = ±4.0 | Max adverse move |
+
+### Switch Between Bots
+
+**To run Double Touch bot (normal):**
+```bash
+pkill -f TradingBot
+nohup python3 -u -c "
+from dotenv import load_dotenv
+load_dotenv()
+from bot import TradingBot
+from config import BotConfig
+TradingBot(BotConfig.from_env()).start()
+" > bot.log 2>&1 &
+```
+
+**To run Spread bot:**
+```bash
+pkill -f TradingBot
+# Use the spread bot start command above
 ```
 
 ---

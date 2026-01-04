@@ -1,5 +1,6 @@
 """
 Double Touch Strategy Trading Bot - Multi-Symbol, Multi-Timeframe Scanner
+Supports both single-asset Double Touch and spread trading modes.
 """
 import time
 import signal
@@ -41,13 +42,29 @@ class TradingBot:
 
         # Build list of all setups: (symbol, timeframe) pairs
         self.setups: List[Tuple[str, str]] = []
-        for symbol in config.symbols:
-            # Default timeframe for all symbols
-            self.setups.append((symbol, config.timeframe))
-            # Extra timeframes for specific symbols
-            if symbol in EXTRA_TIMEFRAMES:
-                for tf in EXTRA_TIMEFRAMES[symbol]:
-                    self.setups.append((symbol, tf))
+
+        # Spread trading mode
+        self.spread_mode = config.spread_trading_enabled
+        self.spread_strategy = None
+        self.spread_feed_a = None  # ETH feed
+        self.spread_feed_b = None  # BTC feed
+        self.last_candle_a = None
+        self.last_candle_b = None
+
+        if not self.spread_mode:
+            # Normal mode: trade multiple symbols
+            for symbol in config.symbols:
+                # Default timeframe for all symbols
+                self.setups.append((symbol, config.timeframe))
+                # Extra timeframes for specific symbols
+                if symbol in EXTRA_TIMEFRAMES:
+                    for tf in EXTRA_TIMEFRAMES[symbol]:
+                        self.setups.append((symbol, tf))
+        else:
+            # Spread mode: only trade the spread pair
+            pair = config.spread_pair
+            self.setups.append((pair.asset_a, config.timeframe))
+            self.setups.append((pair.asset_b, config.timeframe))
 
         # Per-setup components (keyed by "SYMBOL_TIMEFRAME")
         self.feeds: Dict[str, DataFeed] = {}
@@ -72,15 +89,25 @@ class TradingBot:
     def start(self):
         """Start the trading bot."""
         print("=" * 60)
-        print("Double Touch Strategy Bot - Multi-Symbol, Multi-Timeframe")
-        print("=" * 60)
-        print(f"Setups: {len(self.setups)} (symbol+timeframe combinations)")
-        for sym, tf in self.setups:
-            print(f"  - {sym} @ {tf}m")
+        if self.spread_mode:
+            print("SPREAD TRADING BOT - MR Double Touch")
+            print("=" * 60)
+            pair = self.config.spread_pair
+            print(f"Mode: SPREAD TRADING")
+            print(f"Pair: {pair.asset_a} / {pair.asset_b}")
+            print(f"Pattern: z={pair.first_extreme_z} -> z={pair.recovery_z} -> z={pair.second_touch_z}")
+            print(f"TP: z={pair.tp_z}, SL: z={pair.sl_z}")
+        else:
+            print("Double Touch Strategy Bot - Multi-Symbol, Multi-Timeframe")
+            print("=" * 60)
+            print(f"Setups: {len(self.setups)} (symbol+timeframe combinations)")
+            for sym, tf in self.setups:
+                print(f"  - {sym} @ {tf}m")
         print(f"Testnet: {self.config.testnet}")
         print(f"Risk per trade: {self.config.risk_per_trade * 100}%")
-        print(f"Max positions: {self.config.max_positions} (crypto: {self.config.max_crypto_positions}, non-crypto: {self.config.max_non_crypto_positions})")
-        print(f"Risk/Reward: {self.config.risk_reward}:1")
+        if not self.spread_mode:
+            print(f"Max positions: {self.config.max_positions} (crypto: {self.config.max_crypto_positions}, non-crypto: {self.config.max_non_crypto_positions})")
+            print(f"Risk/Reward: {self.config.risk_reward}:1")
         print("=" * 60)
 
         # Setup signal handlers
@@ -100,18 +127,20 @@ class TradingBot:
                 feed = DataFeed(self.config, self.client, symbol, timeframe=timeframe)
                 feed.load_historical(500)
 
-                strategy = DoubleTouchStrategy(
-                    feed,
-                    risk_reward=self.config.risk_reward,
-                    sl_buffer_pct=self.config.sl_buffer_pct,
-                    use_ewvma_filter=self.config.use_ewvma_filter,
-                    counter_trend_mode=self.config.counter_trend_mode,
-                    max_wait_candles=self.config.fvg_max_wait_candles
-                )
-
                 self.feeds[setup_key] = feed
-                self.strategies[setup_key] = strategy
                 self.candles_since_scan[setup_key] = 0
+
+                # Only create Double Touch strategies in normal mode
+                if not self.spread_mode:
+                    strategy = DoubleTouchStrategy(
+                        feed,
+                        risk_reward=self.config.risk_reward,
+                        sl_buffer_pct=self.config.sl_buffer_pct,
+                        use_ewvma_filter=self.config.use_ewvma_filter,
+                        counter_trend_mode=self.config.counter_trend_mode,
+                        max_wait_candles=self.config.fvg_max_wait_candles
+                    )
+                    self.strategies[setup_key] = strategy
 
                 print(f"  ✓ {symbol}@{timeframe}m: {len(feed.candles)} candles loaded")
 
@@ -137,6 +166,10 @@ class TradingBot:
                 print(f"  ✗ {symbol}@{timeframe}m: Failed to load - {e}")
 
         print(f"\nLoaded {len(self.feeds)} setups successfully")
+
+        # Initialize spread strategy if in spread mode
+        if self.spread_mode:
+            self._init_spread_strategy()
 
         # Check for existing positions (recovery after restart)
         self._recover_existing_positions()
@@ -214,7 +247,12 @@ class TradingBot:
         """Process a new confirmed candle for a setup (symbol+timeframe)."""
         timestamp = datetime.fromtimestamp(candle.time / 1000).strftime("%H:%M")
 
-        # Update active signals for this setup
+        # Handle spread mode differently
+        if self.spread_mode:
+            self._on_new_candle_spread(setup_key, candle, timestamp)
+            return
+
+        # Normal mode: Update active signals for this setup
         strategy = self.strategies[setup_key]
         strategy.update_signals(candle)
 
@@ -233,8 +271,60 @@ class TradingBot:
             self._scan_symbol_patterns(setup_key)
             self.candles_since_scan[setup_key] = 0
 
+    def _on_new_candle_spread(self, setup_key: str, candle: Candle, timestamp: str):
+        """Handle new candle in spread trading mode."""
+        if not self.spread_strategy:
+            return
+
+        pair = self.config.spread_pair
+        key_a = make_setup_key(pair.asset_a, self.config.timeframe)
+        key_b = make_setup_key(pair.asset_b, self.config.timeframe)
+
+        # Store latest candles
+        if setup_key == key_a:
+            self.last_candle_a = candle
+        elif setup_key == key_b:
+            self.last_candle_b = candle
+
+        # Wait until we have both candles with matching timestamps
+        if not self.last_candle_a or not self.last_candle_b:
+            return
+        if self.last_candle_a.time != self.last_candle_b.time:
+            return
+
+        # Update spread strategy with aligned candles
+        signal = self.spread_strategy.update(self.last_candle_a, self.last_candle_b)
+
+        # Check spread exits
+        current_z = self.spread_strategy.get_current_zscore()
+        self.order_manager.check_spread_exits(current_z)
+
+        # Execute new signal if found
+        if signal:
+            from spread_strategy import SpreadSignalStatus
+            print(f"[{timestamp}] Spread signal detected!")
+            print(f"  Type: {signal.signal_type.value}")
+            print(f"  Entry Z: {signal.entry_z:.2f}")
+            print(f"  Pattern: {signal.first_extreme_z:.2f} -> {signal.recovery_z:.2f} -> {signal.entry_z:.2f}")
+
+            self._update_account_balance()
+            trade = self.order_manager.execute_spread_signal(signal, self.account_balance)
+            if trade:
+                self.spread_strategy.add_signal(signal)
+
+        # Clear the candles after processing
+        self.last_candle_a = None
+        self.last_candle_b = None
+
     def _scan_all_patterns(self):
         """Scan for patterns across all setups."""
+        if self.spread_mode:
+            # In spread mode, patterns are detected real-time via z-score
+            stats = self.spread_strategy.get_stats() if self.spread_strategy else {}
+            print(f"Spread mode - monitoring z-score: {stats.get('current_zscore', 0):.2f}")
+            print(f"Pattern phase: {stats.get('pattern_phase', 0)}")
+            return
+
         total_signals = 0
         for setup_key in self.feeds:
             count = self._scan_symbol_patterns(setup_key, quiet=True)
@@ -283,6 +373,35 @@ class TradingBot:
             self.account_equity = self.client.get_equity()
         except Exception as e:
             print(f"Balance update error: {e}")
+
+    def _init_spread_strategy(self):
+        """Initialize spread strategy with both asset feeds."""
+        from spread_strategy import SpreadStrategy
+
+        pair = self.config.spread_pair
+        key_a = make_setup_key(pair.asset_a, self.config.timeframe)
+        key_b = make_setup_key(pair.asset_b, self.config.timeframe)
+
+        if key_a not in self.feeds or key_b not in self.feeds:
+            print(f"ERROR: Missing feeds for spread strategy")
+            print(f"  Feed A ({pair.asset_a}): {'✓' if key_a in self.feeds else '✗'}")
+            print(f"  Feed B ({pair.asset_b}): {'✓' if key_b in self.feeds else '✗'}")
+            return
+
+        self.spread_feed_a = self.feeds[key_a]
+        self.spread_feed_b = self.feeds[key_b]
+
+        self.spread_strategy = SpreadStrategy(
+            self.config,
+            self.spread_feed_a,
+            self.spread_feed_b
+        )
+
+        stats = self.spread_strategy.get_stats()
+        print(f"\nSpread Strategy Initialized:")
+        print(f"  Hedge Ratio: {stats.get('hedge_ratio', 0):.6f}")
+        print(f"  Current Z-Score: {stats.get('current_zscore', 0):.2f}")
+        print(f"  History Length: {stats.get('history_length', 0)} candles")
 
     def _record_equity_snapshot(self):
         """Record equity snapshot for performance tracking."""
@@ -421,21 +540,38 @@ class TradingBot:
 
     def _print_stats(self):
         """Print trading statistics."""
-        stats = self.order_manager.get_stats()
-
-        # Count active signals across all setups
-        total_signals = sum(len(s.active_signals) for s in self.strategies.values())
-
         print("\n" + "=" * 40)
-        print("Trading Stats")
-        print("=" * 40)
-        print(f"Setups monitored: {len(self.feeds)}")
-        print(f"Active signals: {total_signals}")
-        print(f"Open trades: {stats.get('open_trades', 0)}")
-        print(f"Total trades: {stats.get('total_trades', 0)}")
-        print(f"Win rate: {stats.get('win_rate', 0) * 100:.1f}%")
-        print(f"Daily P&L: ${stats.get('daily_pnl', 0):.2f}")
-        print(f"Total P&L: ${stats.get('total_pnl', 0):.2f}")
+
+        if self.spread_mode:
+            # Spread trading stats
+            stats = self.order_manager.get_spread_stats()
+            spread_stats = self.spread_strategy.get_stats() if self.spread_strategy else {}
+
+            print("Spread Trading Stats")
+            print("=" * 40)
+            print(f"Current Z-Score: {spread_stats.get('current_zscore', 0):.2f}")
+            print(f"Pattern Phase: {spread_stats.get('pattern_phase', 0)}")
+            print(f"Active spread trades: {stats.get('active_spread_trades', 0)}")
+            print(f"Total spread trades: {stats.get('total_spread_trades', 0)}")
+            print(f"Win rate: {stats.get('spread_win_rate', 0) * 100:.1f}%")
+            print(f"Spread P&L: ${stats.get('spread_pnl', 0):.2f}")
+        else:
+            # Normal trading stats
+            stats = self.order_manager.get_stats()
+
+            # Count active signals across all setups
+            total_signals = sum(len(s.active_signals) for s in self.strategies.values())
+
+            print("Trading Stats")
+            print("=" * 40)
+            print(f"Setups monitored: {len(self.feeds)}")
+            print(f"Active signals: {total_signals}")
+            print(f"Open trades: {stats.get('open_trades', 0)}")
+            print(f"Total trades: {stats.get('total_trades', 0)}")
+            print(f"Win rate: {stats.get('win_rate', 0) * 100:.1f}%")
+            print(f"Daily P&L: ${stats.get('daily_pnl', 0):.2f}")
+            print(f"Total P&L: ${stats.get('total_pnl', 0):.2f}")
+
         print("=" * 40 + "\n")
 
     def _handle_shutdown(self, signum, frame):
@@ -451,9 +587,14 @@ class TradingBot:
         if self.ws:
             self.ws.disconnect()
 
-        # Cancel pending orders for all unique symbols
-        unique_symbols = list(set(sym for sym, _ in self.setups))
-        self.order_manager.cancel_pending_orders(unique_symbols)
+        if self.spread_mode:
+            # Close spread trades on shutdown
+            print("Closing spread trades...")
+            self.order_manager.close_all_spread_trades("shutdown")
+        else:
+            # Cancel pending orders for all unique symbols
+            unique_symbols = list(set(sym for sym, _ in self.setups))
+            self.order_manager.cancel_pending_orders(unique_symbols)
 
         # Print final stats
         self._print_stats()
