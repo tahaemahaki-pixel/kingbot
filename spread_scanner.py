@@ -56,7 +56,7 @@ class SpreadScanner:
         self,
         config: BotConfig,
         feeds: Dict[str, DataFeed],
-        check_interval: int = 20,         # Candles between cointegration checks (~1.7h)
+        check_interval: int = 5,          # Candles between cointegration checks (~25 min)
         p_threshold: float = 0.05,        # Max p-value to enable trading
         p_disable_threshold: float = 0.15 # P-value to disable trading
     ):
