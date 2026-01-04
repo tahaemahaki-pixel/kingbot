@@ -25,7 +25,6 @@ class TradeSignal:
     signal_type: SignalType
     status: SignalStatus
     symbol: str  # Trading symbol (e.g., ETHUSDT)
-    setup_key: str = ""  # Unique key for setup (e.g., ETHUSDT_5 or ETHUSDT_1)
 
     # Pattern points
     a_index: int
@@ -48,6 +47,7 @@ class TradeSignal:
     created_at: int  # Candle time when signal was created
     max_wait_candles: int = 20
     candles_waited: int = 0
+    setup_key: str = ""  # Unique key for setup (e.g., ETHUSDT_5 or ETHUSDT_1)
 
     def get_risk_reward(self) -> float:
         """Calculate risk/reward ratio."""
