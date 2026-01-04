@@ -6,8 +6,8 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Dict
 from enum import Enum
 from bybit_client import BybitClient, Position, Order
-from strategy import TradeSignal, SignalType, SignalStatus
-from config import BotConfig
+from double_touch_strategy import TradeSignal, SignalType, SignalStatus
+from config import BotConfig, get_asset_type
 
 
 class TradeStatus(Enum):
@@ -119,12 +119,26 @@ class OrderManager:
 
         return position_size
 
-    def can_open_trade(self, account_balance: float, setup_key: str = None) -> tuple[bool, str]:
+    def can_open_trade(self, account_balance: float, setup_key: str = None, symbol: str = None) -> tuple[bool, str]:
         """Check if we can open a new trade based on risk rules."""
         # Check max positions (include pending orders)
         active_trades = [t for t in self.active_trades if t.status in (TradeStatus.OPEN, TradeStatus.PENDING_FILL)]
         if len(active_trades) >= self.config.max_positions:
             return False, f"Max positions ({self.config.max_positions}) reached"
+
+        # Check asset type limits (3 crypto + 2 non-crypto)
+        if symbol:
+            asset_type = get_asset_type(symbol)
+            if asset_type == "crypto":
+                crypto_count = len([t for t in active_trades
+                                   if get_asset_type(t.signal.symbol) == "crypto"])
+                if crypto_count >= self.config.max_crypto_positions:
+                    return False, f"Max crypto positions ({self.config.max_crypto_positions}) reached"
+            else:
+                non_crypto_count = len([t for t in active_trades
+                                       if get_asset_type(t.signal.symbol) == "non_crypto"])
+                if non_crypto_count >= self.config.max_non_crypto_positions:
+                    return False, f"Max non-crypto positions ({self.config.max_non_crypto_positions}) reached"
 
         # Check if we already have a trade/order for this setup (symbol+timeframe)
         if setup_key:
@@ -147,7 +161,7 @@ class OrderManager:
 
         # Check if we can trade (using setup_key for multi-timeframe support)
         setup_key = signal.setup_key or signal.symbol
-        can_trade, reason = self.can_open_trade(account_balance, setup_key)
+        can_trade, reason = self.can_open_trade(account_balance, setup_key, signal.symbol)
         if not can_trade:
             print(f"Cannot open trade: {reason}")
             return None
@@ -158,8 +172,9 @@ class OrderManager:
             print("Position size too small")
             return None
 
-        # Determine side
-        side = "Buy" if signal.signal_type == SignalType.LONG_KING else "Sell"
+        # Determine side - handle both Double Touch and legacy King signal types
+        is_long = signal.signal_type in (SignalType.LONG_DOUBLE_TOUCH,)
+        side = "Buy" if is_long else "Sell"
 
         try:
             # Place the order with SL/TP
@@ -260,7 +275,8 @@ class OrderManager:
                         print(f"Order filled: {symbol} @ {exchange_position.entry_price}")
 
                         if self.notifier:
-                            side = "Buy" if trade.signal.signal_type == SignalType.LONG_KING else "Sell"
+                            is_long = trade.signal.signal_type in (SignalType.LONG_DOUBLE_TOUCH,)
+                            side = "Buy" if is_long else "Sell"
                             self.notifier.notify_order_filled(
                                 symbol=symbol,
                                 side=side,
@@ -283,7 +299,8 @@ class OrderManager:
                             trade.status = TradeStatus.CANCELLED
                             print(f"Order cancelled/expired: {symbol}")
                             if self.notifier:
-                                side = "Buy" if trade.signal.signal_type == SignalType.LONG_KING else "Sell"
+                                is_long = trade.signal.signal_type in (SignalType.LONG_DOUBLE_TOUCH,)
+                                side = "Buy" if is_long else "Sell"
                                 self.notifier.notify_order_cancelled(symbol, side, "price moved away")
                             self.active_trades.remove(trade)
                     except Exception as e:
@@ -351,7 +368,8 @@ class OrderManager:
 
         # Calculate P&L (simplified - in real implementation, fetch from API)
         if trade.entry_filled_price and trade.exit_price:
-            if trade.signal.signal_type == SignalType.LONG_KING:
+            is_long = trade.signal.signal_type in (SignalType.LONG_DOUBLE_TOUCH,)
+            if is_long:
                 trade.realized_pnl = (trade.exit_price - trade.entry_filled_price) * trade.position_size
             else:
                 trade.realized_pnl = (trade.entry_filled_price - trade.exit_price) * trade.position_size
@@ -362,7 +380,8 @@ class OrderManager:
 
         # Send Telegram notification
         if self.notifier:
-            side = "LONG" if trade.signal.signal_type == SignalType.LONG_KING else "SHORT"
+            is_long = trade.signal.signal_type in (SignalType.LONG_DOUBLE_TOUCH,)
+            side = "LONG" if is_long else "SHORT"
             self.notifier.notify_trade_closed(
                 symbol=trade.signal.symbol,
                 side=side,
@@ -377,7 +396,8 @@ class OrderManager:
 
         try:
             # Determine close side (opposite of entry)
-            close_side = "Sell" if trade.signal.signal_type == SignalType.LONG_KING else "Buy"
+            is_long = trade.signal.signal_type in (SignalType.LONG_DOUBLE_TOUCH,)
+            close_side = "Sell" if is_long else "Buy"
 
             self.client.place_order(
                 symbol=trade.signal.symbol,

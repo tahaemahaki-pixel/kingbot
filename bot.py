@@ -1,5 +1,5 @@
 """
-King Strategy Trading Bot - Multi-Symbol, Multi-Timeframe Scanner
+Double Touch Strategy Trading Bot - Multi-Symbol, Multi-Timeframe Scanner
 """
 import time
 import signal
@@ -9,7 +9,7 @@ from typing import Optional, Dict, List, Tuple
 from config import BotConfig, EXTRA_TIMEFRAMES
 from bybit_client import BybitClient, BybitWebSocket
 from data_feed import DataFeed, Candle
-from strategy import KingStrategy, SignalStatus, TradeSignal
+from double_touch_strategy import DoubleTouchStrategy, SignalStatus, TradeSignal
 from order_manager import OrderManager
 from notifier import TelegramNotifier
 
@@ -26,7 +26,7 @@ def parse_setup_key(key: str) -> Tuple[str, str]:
 
 
 class TradingBot:
-    """Main trading bot orchestrator - scans multiple symbols and timeframes."""
+    """Double Touch trading bot - scans multiple symbols and timeframes."""
 
     def __init__(self, config: BotConfig):
         self.config = config
@@ -50,7 +50,7 @@ class TradingBot:
 
         # Per-setup components (keyed by "SYMBOL_TIMEFRAME")
         self.feeds: Dict[str, DataFeed] = {}
-        self.strategies: Dict[str, KingStrategy] = {}
+        self.strategies: Dict[str, DoubleTouchStrategy] = {}
 
         # Shared components
         self.order_manager = OrderManager(config, self.client, self.notifier)
@@ -67,14 +67,15 @@ class TradingBot:
     def start(self):
         """Start the trading bot."""
         print("=" * 60)
-        print("King Strategy Trading Bot - Multi-Symbol, Multi-Timeframe")
+        print("Double Touch Strategy Bot - Multi-Symbol, Multi-Timeframe")
         print("=" * 60)
         print(f"Setups: {len(self.setups)} (symbol+timeframe combinations)")
         for sym, tf in self.setups:
             print(f"  - {sym} @ {tf}m")
         print(f"Testnet: {self.config.testnet}")
         print(f"Risk per trade: {self.config.risk_per_trade * 100}%")
-        print(f"Max positions: {self.config.max_positions}")
+        print(f"Max positions: {self.config.max_positions} (crypto: {self.config.max_crypto_positions}, non-crypto: {self.config.max_non_crypto_positions})")
+        print(f"Risk/Reward: {self.config.risk_reward}:1")
         print("=" * 60)
 
         # Setup signal handlers
@@ -94,9 +95,12 @@ class TradingBot:
                 feed = DataFeed(self.config, self.client, symbol, timeframe=timeframe)
                 feed.load_historical(200)
 
-                strategy = KingStrategy(
+                strategy = DoubleTouchStrategy(
                     feed,
-                    swing_lookback=self.config.swing_lookback,
+                    risk_reward=self.config.risk_reward,
+                    sl_buffer_pct=self.config.sl_buffer_pct,
+                    use_ewvma_filter=self.config.use_ewvma_filter,
+                    counter_trend_mode=self.config.counter_trend_mode,
                     max_wait_candles=self.config.fvg_max_wait_candles
                 )
 
@@ -231,7 +235,7 @@ class TradingBot:
         self._print_active_signals()
 
     def _scan_symbol_patterns(self, setup_key: str, quiet: bool = False) -> int:
-        """Scan for new King patterns on a setup."""
+        """Scan for new Double Touch patterns on a setup."""
         strategy = self.strategies[setup_key]
         new_signals = strategy.scan_for_patterns()
 
@@ -274,7 +278,7 @@ class TradingBot:
     def _recover_existing_positions(self):
         """Check for existing positions and pending orders from previous session."""
         from order_manager import Trade, TradeStatus
-        from strategy import TradeSignal, SignalType, SignalStatus
+        from double_touch_strategy import TradeSignal, SignalType, SignalStatus
         from data_feed import FVG
 
         recovered_count = 0
@@ -292,15 +296,14 @@ class TradingBot:
                     is_long = pos.side == "Buy"
 
                     dummy_signal = TradeSignal(
-                        signal_type=SignalType.LONG_KING if is_long else SignalType.SHORT_KING,
+                        signal_type=SignalType.LONG_DOUBLE_TOUCH if is_long else SignalType.SHORT_DOUBLE_TOUCH,
                         status=SignalStatus.FILLED,
                         symbol=symbol,
-                        a_index=0, a_price=0,
-                        c_index=0, c_price=pos.take_profit or pos.entry_price * (1.05 if is_long else 0.95),
-                        d_index=0,
-                        e_index=0, e_price=pos.stop_loss or pos.entry_price * (0.95 if is_long else 1.05),
-                        e_candle_open=pos.entry_price,
-                        f_index=0,
+                        setup_key=f"{symbol}_5",
+                        step_0_idx=0, step_0_price=0,
+                        step_1_idx=0,
+                        step_2_idx=0,
+                        step_3_idx=0, step_3_price=pos.stop_loss or pos.entry_price * (0.95 if is_long else 1.05),
                         fvg=FVG(0, 'bullish' if is_long else 'bearish', pos.entry_price, pos.entry_price, 0),
                         entry_price=pos.entry_price,
                         stop_loss=pos.stop_loss or pos.entry_price * (0.95 if is_long else 1.05),
@@ -343,15 +346,14 @@ class TradingBot:
                     is_long = order.side == "Buy"
 
                     dummy_signal = TradeSignal(
-                        signal_type=SignalType.LONG_KING if is_long else SignalType.SHORT_KING,
+                        signal_type=SignalType.LONG_DOUBLE_TOUCH if is_long else SignalType.SHORT_DOUBLE_TOUCH,
                         status=SignalStatus.FILLED,
                         symbol=symbol,
-                        a_index=0, a_price=0,
-                        c_index=0, c_price=order.price * (1.05 if is_long else 0.95),
-                        d_index=0,
-                        e_index=0, e_price=order.price * (0.95 if is_long else 1.05),
-                        e_candle_open=order.price,
-                        f_index=0,
+                        setup_key=f"{symbol}_5",
+                        step_0_idx=0, step_0_price=0,
+                        step_1_idx=0,
+                        step_2_idx=0,
+                        step_3_idx=0, step_3_price=order.price * (0.95 if is_long else 1.05),
                         fvg=FVG(0, 'bullish' if is_long else 'bearish', order.price, order.price, 0),
                         entry_price=order.price,
                         stop_loss=order.price * (0.95 if is_long else 1.05),

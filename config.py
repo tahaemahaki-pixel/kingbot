@@ -1,12 +1,14 @@
 """
 Bybit Trading Bot Configuration
+Double Touch Strategy Bot
 """
 import os
 from dataclasses import dataclass
 from typing import Optional, List
 
-# Symbols to trade (USDT perpetuals on Bybit)
-DEFAULT_SYMBOLS = [
+# ==================== ASSET CLASSIFICATION ====================
+# Crypto assets (trade on Bybit)
+CRYPTO_ASSETS = [
     "BTCUSDT",
     "ETHUSDT",
     "SOLUSDT",
@@ -29,10 +31,28 @@ DEFAULT_SYMBOLS = [
     "INJUSDT",
 ]
 
+# Non-crypto assets (for future support - Gold, indices, etc.)
+NON_CRYPTO_ASSETS = [
+    # "XAUUSD",  # Gold - uncomment when adding non-crypto broker
+]
+
+
+def get_asset_type(symbol: str) -> str:
+    """Return 'crypto' or 'non_crypto' for position limit tracking."""
+    # Strip any suffixes and check
+    base_symbol = symbol.upper().replace(".P", "")
+    if base_symbol in CRYPTO_ASSETS:
+        return "crypto"
+    return "non_crypto"
+
+
+# Default symbols to trade
+DEFAULT_SYMBOLS = CRYPTO_ASSETS.copy()
+
 # Additional timeframe setups (symbol -> list of extra timeframes)
 # These are IN ADDITION to the default timeframe
 EXTRA_TIMEFRAMES = {
-    "ETHUSDT": ["1"],  # Also trade ETH on 1-minute
+    # "ETHUSDT": ["1"],  # Disabled for Double Touch - 5m only
 }
 
 
@@ -54,13 +74,26 @@ class BotConfig:
 
     # Risk Management
     risk_per_trade: float = 0.01  # 1% risk per trade
-    max_positions: int = 3  # Max concurrent positions
+    max_positions: int = 5  # Max total concurrent positions
+    max_crypto_positions: int = 3  # Max crypto positions
+    max_non_crypto_positions: int = 2  # Max non-crypto (gold, indices)
     max_daily_loss: float = 0.05  # 5% max daily loss
 
-    # Strategy Settings
+    # Strategy Settings (King - legacy)
     evwma_length: int = 20
     swing_lookback: int = 3
     fvg_max_wait_candles: int = 20
+
+    # Double Touch Strategy Settings
+    ema_fast: int = 9
+    ema_med: int = 21
+    ema_slow: int = 50
+    hh_ll_lookback: int = 20  # Lookback for HH/LL detection
+    ewvma_filter_length: int = 200
+    use_ewvma_filter: bool = True
+    counter_trend_mode: bool = True  # Default: counter-trend (mean reversion)
+    risk_reward: float = 3.0  # Target R:R ratio
+    sl_buffer_pct: float = 0.001  # 0.1% buffer beyond step 3 for SL
 
     # Execution
     use_limit_orders: bool = True  # Use limit orders at FVG

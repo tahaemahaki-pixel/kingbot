@@ -20,13 +20,26 @@ class Candle:
     volume: float
     confirmed: bool = False
 
-    # EVWMA values (calculated)
+    # EVWMA values (calculated) - for King strategy ribbon
     evwma_mid: float = None
     evwma_upper: float = None
     evwma_lower: float = None
 
     # SMA for trend filter
     sma300: float = None
+
+    # Double Touch: EMA Ribbon (9/21/50)
+    ema9: float = None
+    ema21: float = None
+    ema50: float = None
+    band_color: str = None  # 'green', 'red', 'grey'
+
+    # Double Touch: HH/LL detection
+    is_hh: bool = False  # Higher High
+    is_ll: bool = False  # Lower Low
+
+    # Double Touch: EWVMA-200 for counter-trend filter
+    ewvma_200: float = None
 
 
 @dataclass
@@ -59,11 +72,20 @@ class DataFeed:
         self.max_candles = 500  # Keep last 500 candles
         self.on_new_candle: Optional[Callable] = None
 
-        # EVWMA state
+        # EVWMA state (King strategy)
         self.evwma_mid_prev = None
         self.evwma_upper_prev = None
         self.evwma_lower_prev = None
         self.volume_sum = deque(maxlen=config.evwma_length)
+
+        # Double Touch: EMA state for real-time updates
+        self.ema9_prev = None
+        self.ema21_prev = None
+        self.ema50_prev = None
+
+        # Double Touch: EWVMA-200 state
+        self.ewvma_200_prev = None
+        self.volume_sum_200 = deque(maxlen=200)
 
     def load_historical(self, limit: int = 200):
         """Load historical candles from API."""
@@ -89,8 +111,13 @@ class DataFeed:
             )
             self.candles.append(candle)
 
-        # Calculate EVWMA for all historical candles
+        # Calculate EVWMA for all historical candles (King strategy)
         self._calculate_evwma_all()
+
+        # Calculate Double Touch indicators
+        self._calculate_ema_ribbon()
+        self._calculate_ewvma_200()
+        self._detect_hh_ll(lookback=20)
 
         print(f"Loaded {len(self.candles)} historical candles")
 
@@ -186,7 +213,45 @@ class DataFeed:
             else:
                 new_candle.sma300 = None
 
+            # ===== DOUBLE TOUCH: Calculate EMA ribbon =====
+            mult9 = 2 / (9 + 1)
+            mult21 = 2 / (21 + 1)
+            mult50 = 2 / (50 + 1)
+
+            if self.ema9_prev is not None:
+                new_candle.ema9 = new_candle.close * mult9 + self.ema9_prev * (1 - mult9)
+                new_candle.ema21 = new_candle.close * mult21 + self.ema21_prev * (1 - mult21)
+                new_candle.ema50 = new_candle.close * mult50 + self.ema50_prev * (1 - mult50)
+            else:
+                new_candle.ema9 = new_candle.close
+                new_candle.ema21 = new_candle.close
+                new_candle.ema50 = new_candle.close
+
+            self.ema9_prev = new_candle.ema9
+            self.ema21_prev = new_candle.ema21
+            self.ema50_prev = new_candle.ema50
+
+            # Calculate band color
+            new_candle.band_color = self._get_band_color(new_candle.ema9, new_candle.ema21, new_candle.ema50)
+
+            # ===== DOUBLE TOUCH: Calculate EWVMA-200 =====
+            self.volume_sum_200.append(vol)
+            if self.ewvma_200_prev is not None:
+                nbfs_200 = sum(self.volume_sum_200)
+                if nbfs_200 > 0:
+                    new_candle.ewvma_200 = self.ewvma_200_prev * (nbfs_200 - vol) / nbfs_200 + (vol * new_candle.close / nbfs_200)
+                else:
+                    new_candle.ewvma_200 = new_candle.close
+            else:
+                new_candle.ewvma_200 = new_candle.close
+
+            self.ewvma_200_prev = new_candle.ewvma_200
+
             self.candles.append(new_candle)
+
+            # ===== DOUBLE TOUCH: Detect HH/LL for latest candles =====
+            # Re-detect HH/LL for recent candles (last 25 to cover lookback window)
+            self._detect_hh_ll_recent(lookback=20)
 
             # Trim to max candles
             if len(self.candles) > self.max_candles:
@@ -331,6 +396,178 @@ class DataFeed:
         if self.candles:
             return self.candles[-1].close
         return 0
+
+    # ==================== DOUBLE TOUCH INDICATORS ====================
+
+    def _calculate_ema_ribbon(self):
+        """Calculate EMA 9/21/50 and band color for all candles."""
+        if not self.candles:
+            return
+
+        # EMA multipliers
+        mult9 = 2 / (9 + 1)
+        mult21 = 2 / (21 + 1)
+        mult50 = 2 / (50 + 1)
+
+        # Initialize with first close
+        ema9 = self.candles[0].close
+        ema21 = self.candles[0].close
+        ema50 = self.candles[0].close
+
+        for i, candle in enumerate(self.candles):
+            if i == 0:
+                candle.ema9 = ema9
+                candle.ema21 = ema21
+                candle.ema50 = ema50
+            else:
+                ema9 = candle.close * mult9 + ema9 * (1 - mult9)
+                ema21 = candle.close * mult21 + ema21 * (1 - mult21)
+                ema50 = candle.close * mult50 + ema50 * (1 - mult50)
+
+                candle.ema9 = ema9
+                candle.ema21 = ema21
+                candle.ema50 = ema50
+
+            # Determine band color
+            candle.band_color = self._get_band_color(candle.ema9, candle.ema21, candle.ema50)
+
+        # Save state for real-time updates
+        self.ema9_prev = ema9
+        self.ema21_prev = ema21
+        self.ema50_prev = ema50
+
+    def _get_band_color(self, ema9: float, ema21: float, ema50: float) -> str:
+        """Determine band color from EMA alignment."""
+        if ema9 is None or ema21 is None or ema50 is None:
+            return 'grey'
+
+        if ema9 > ema21 > ema50:
+            return 'green'  # Bullish
+        elif ema9 < ema21 < ema50:
+            return 'red'    # Bearish
+        else:
+            return 'grey'   # Neutral/transition
+
+    def _calculate_ewvma_200(self):
+        """Calculate EWVMA-200 for counter-trend filter."""
+        if not self.candles:
+            return
+
+        # Reset state
+        self.volume_sum_200.clear()
+        ewvma_prev = None
+
+        for i, candle in enumerate(self.candles):
+            vol = candle.volume if candle.volume > 0 else 1
+            self.volume_sum_200.append(vol)
+
+            if ewvma_prev is None:
+                candle.ewvma_200 = candle.close
+            else:
+                nbfs = sum(self.volume_sum_200)
+                if nbfs > 0:
+                    candle.ewvma_200 = ewvma_prev * (nbfs - vol) / nbfs + (vol * candle.close / nbfs)
+                else:
+                    candle.ewvma_200 = candle.close
+
+            ewvma_prev = candle.ewvma_200
+
+        # Save state for real-time updates
+        self.ewvma_200_prev = ewvma_prev
+
+    def _detect_hh_ll(self, lookback: int = 20):
+        """Detect Higher Highs and Lower Lows for pattern detection."""
+        if len(self.candles) < lookback + 1:
+            return
+
+        for i in range(lookback, len(self.candles)):
+            candle = self.candles[i]
+
+            # Get max high and min low in lookback window (excluding current)
+            window_highs = [c.high for c in self.candles[i-lookback:i]]
+            window_lows = [c.low for c in self.candles[i-lookback:i]]
+
+            max_high = max(window_highs) if window_highs else 0
+            min_low = min(window_lows) if window_lows else float('inf')
+
+            # Higher High: current high exceeds all highs in lookback
+            candle.is_hh = candle.high > max_high
+
+            # Lower Low: current low is below all lows in lookback
+            candle.is_ll = candle.low < min_low
+
+    def _detect_hh_ll_recent(self, lookback: int = 20):
+        """Detect HH/LL for only the most recent candles (for real-time updates)."""
+        if len(self.candles) < lookback + 1:
+            return
+
+        # Only check the last few candles (saves computation)
+        start_idx = max(lookback, len(self.candles) - 5)
+
+        for i in range(start_idx, len(self.candles)):
+            candle = self.candles[i]
+
+            # Get max high and min low in lookback window (excluding current)
+            window_highs = [c.high for c in self.candles[i-lookback:i]]
+            window_lows = [c.low for c in self.candles[i-lookback:i]]
+
+            max_high = max(window_highs) if window_highs else 0
+            min_low = min(window_lows) if window_lows else float('inf')
+
+            candle.is_hh = candle.high > max_high
+            candle.is_ll = candle.low < min_low
+
+    def get_band_color(self, index: int) -> str:
+        """Get band color at specific index."""
+        if 0 <= index < len(self.candles):
+            return self.candles[index].band_color or 'grey'
+        return 'grey'
+
+    def get_ewvma_200(self, index: int) -> Optional[float]:
+        """Get EWVMA-200 value at specific index."""
+        if 0 <= index < len(self.candles):
+            return self.candles[index].ewvma_200
+        return None
+
+    def is_hh(self, index: int) -> bool:
+        """Check if candle at index is a Higher High."""
+        if 0 <= index < len(self.candles):
+            return self.candles[index].is_hh
+        return False
+
+    def is_ll(self, index: int) -> bool:
+        """Check if candle at index is a Lower Low."""
+        if 0 <= index < len(self.candles):
+            return self.candles[index].is_ll
+        return False
+
+    def check_ewvma_counter_trend(self, index: int, direction: str) -> bool:
+        """
+        Check EWVMA-200 counter-trend filter.
+
+        For LONGS: Price at index must be BELOW EWVMA-200 (mean reversion from oversold)
+        For SHORTS: Price at index must be ABOVE EWVMA-200 (mean reversion from overbought)
+
+        Args:
+            index: Candle index to check (typically Step 0)
+            direction: 'long' or 'short'
+
+        Returns:
+            True if counter-trend filter passes
+        """
+        if index < 0 or index >= len(self.candles):
+            return False
+
+        candle = self.candles[index]
+        if candle.ewvma_200 is None:
+            return False
+
+        if direction == 'long':
+            return candle.close < candle.ewvma_200
+        else:  # short
+            return candle.close > candle.ewvma_200
+
+    # ==================== END DOUBLE TOUCH INDICATORS ====================
 
     def to_dataframe(self) -> pd.DataFrame:
         """Convert candles to DataFrame."""

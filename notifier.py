@@ -143,7 +143,7 @@ class TelegramNotifier:
 
 <b>Symbols:</b> {symbols_count}
 <b>Balance:</b> ${balance:.2f}
-<b>Status:</b> Scanning for King patterns...
+<b>Status:</b> Scanning for Double Touch patterns...
 """
         self.send(msg.strip())
 
