@@ -12,6 +12,7 @@ from data_feed import DataFeed, Candle
 from double_touch_strategy import DoubleTouchStrategy, SignalStatus, TradeSignal
 from order_manager import OrderManager
 from notifier import TelegramNotifier
+from trade_tracker import get_tracker
 
 
 def make_setup_key(symbol: str, timeframe: str) -> str:
@@ -63,6 +64,10 @@ class TradingBot:
         self.account_balance = 0.0  # Available balance (for position sizing)
         self.account_equity = 0.0   # Total equity (for display)
         self.candles_since_scan: Dict[str, int] = {}
+
+        # Performance tracking
+        self.tracker = get_tracker()
+        self.last_equity_snapshot = 0.0
 
     def start(self):
         """Start the trading bot."""
@@ -159,6 +164,9 @@ class TradingBot:
         last_sync = time.time()
         last_stats = time.time()
 
+        # Record initial equity snapshot
+        self._record_equity_snapshot()
+
         while self.running:
             try:
                 current_time = time.time()
@@ -168,9 +176,10 @@ class TradingBot:
                     self.order_manager.sync_positions()
                     last_sync = current_time
 
-                # Print stats every 5 minutes
+                # Print stats and record equity every 5 minutes
                 if current_time - last_stats >= 300:
                     self._print_stats()
+                    self._record_equity_snapshot()
                     last_stats = current_time
 
                 time.sleep(1)
@@ -274,6 +283,33 @@ class TradingBot:
             self.account_equity = self.client.get_equity()
         except Exception as e:
             print(f"Balance update error: {e}")
+
+    def _record_equity_snapshot(self):
+        """Record equity snapshot for performance tracking."""
+        try:
+            self._update_account_balance()
+
+            # Get unrealized P&L from open positions
+            unrealized_pnl = 0.0
+            open_positions = 0
+            try:
+                positions = self.client.get_positions()
+                for pos in positions:
+                    if pos.size > 0:
+                        unrealized_pnl += pos.unrealized_pnl
+                        open_positions += 1
+            except:
+                pass
+
+            # Record the snapshot
+            self.tracker.record_equity_snapshot(
+                equity=self.account_equity,
+                available_balance=self.account_balance,
+                unrealized_pnl=unrealized_pnl,
+                open_positions=open_positions
+            )
+        except Exception as e:
+            print(f"Equity snapshot error: {e}")
 
     def _recover_existing_positions(self):
         """Check for existing positions and pending orders from previous session."""

@@ -265,6 +265,48 @@ systemctl restart doubletouchbot # Restart bot
 
 ---
 
+## Performance Tracking CLI
+
+The bot includes a comprehensive performance tracking system with SQLite storage and CLI interface.
+
+### CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `python start.py stats` | Show overall trading statistics |
+| `python start.py stats today` | Today's stats only |
+| `python start.py stats week --symbol BTCUSDT` | Weekly stats for BTC |
+| `python start.py trades -n 20` | Last 20 trades |
+| `python start.py trades --winners` | Winners only |
+| `python start.py trades --losers` | Losers only |
+| `python start.py equity` | Equity curve and drawdowns |
+| `python start.py assets --sort pnl` | Per-asset breakdown |
+| `python start.py sessions -n 10` | Best/worst trading days |
+| `python start.py time` | Performance by hour/day of week |
+| `python start.py streaks` | Win/loss streak analysis |
+| `python start.py export trades --format csv` | Export to CSV |
+
+### Example Output: Stats
+```
+============================================================
+TRADING PERFORMANCE STATISTICS
+============================================================
+Total Trades:                         45
+Win Rate:                          42.2%
+Profit Factor:                      1.85
+Net P&L:                       +$567.89
+Max Drawdown:                     12.5%
+Avg R-Multiple:                  +0.45R
+============================================================
+```
+
+### Database Location
+```
+data/trading_performance.db
+```
+
+---
+
 ## Safety Notes
 
 1. **Start with small amounts** - Uses real money!

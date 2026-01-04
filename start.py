@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Start script for King Trading Bot"""
+"""Start script for Double Touch Trading Bot"""
 import os
 import sys
 import atexit
@@ -10,6 +10,19 @@ PID_FILE = os.path.join(BOT_DIR, 'bot.pid')
 
 os.chdir(BOT_DIR)
 sys.path.insert(0, BOT_DIR)
+
+# CLI commands for performance tracking
+CLI_COMMANDS = ['stats', 'trades', 'equity', 'assets', 'sessions', 'time', 'export', 'streaks']
+
+
+def run_cli():
+    """Run CLI command if one is specified."""
+    if len(sys.argv) > 1 and sys.argv[1] in CLI_COMMANDS:
+        from performance_cli import PerformanceCLI
+        cli = PerformanceCLI()
+        cli.run(sys.argv[1:])
+        return True
+    return False
 
 
 def check_single_instance():
@@ -48,6 +61,10 @@ def cleanup_pid():
     except:
         pass
 
+
+# Check for CLI commands first (don't need PID check for CLI)
+if run_cli():
+    sys.exit(0)
 
 # Register cleanup
 atexit.register(cleanup_pid)

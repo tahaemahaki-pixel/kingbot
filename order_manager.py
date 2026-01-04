@@ -8,6 +8,7 @@ from enum import Enum
 from bybit_client import BybitClient, Position, Order
 from double_touch_strategy import TradeSignal, SignalType, SignalStatus
 from config import BotConfig, get_asset_type
+from trade_tracker import get_tracker
 
 
 class TradeStatus(Enum):
@@ -74,6 +75,10 @@ class OrderManager:
         self.active_trades: List[Trade] = []
         self.closed_trades: List[Trade] = []
         self.daily_pnl: float = 0.0
+
+        # Performance tracking
+        self.tracker = get_tracker()
+        self.trade_id_map: Dict[str, str] = {}  # entry_order_id -> tracker_trade_id
 
     def _round_qty(self, symbol: str, qty: float, price: float) -> float:
         """Round quantity to valid step size for the symbol and ensure min order value."""
@@ -216,6 +221,25 @@ class OrderManager:
             self.active_trades.append(trade)
             signal.status = SignalStatus.FILLED
 
+            # Record trade in tracker
+            try:
+                risk_amount = abs(signal.entry_price - signal.stop_loss) * position_size
+                tracker_trade_id = self.tracker.record_trade_opened(
+                    symbol=signal.symbol,
+                    setup_key=signal.setup_key or signal.symbol,
+                    signal_type=signal.signal_type.value,
+                    entry_order_id=order.order_id,
+                    planned_entry_price=signal.entry_price,
+                    stop_loss=signal.stop_loss,
+                    take_profit=signal.target,
+                    risk_amount_usd=risk_amount,
+                    position_size=position_size,
+                    account_equity=account_balance
+                )
+                self.trade_id_map[order.order_id] = tracker_trade_id
+            except Exception as e:
+                print(f"Tracker record failed: {e}")
+
             print(f"Order placed: {side} {position_size} {signal.symbol} @ {signal.entry_price}")
             print(f"  SL: {signal.stop_loss}, TP: {signal.target}")
 
@@ -274,6 +298,20 @@ class OrderManager:
                         trade.entry_filled_price = exchange_position.entry_price
                         print(f"Order filled: {symbol} @ {exchange_position.entry_price}")
 
+                        # Update tracker with fill info
+                        if trade.entry_order_id in self.trade_id_map:
+                            try:
+                                position_value = exchange_position.entry_price * trade.position_size
+                                slippage = exchange_position.entry_price - trade.signal.entry_price
+                                self.tracker.update_trade_fill(
+                                    trade_id=self.trade_id_map[trade.entry_order_id],
+                                    entry_price=exchange_position.entry_price,
+                                    position_value=position_value,
+                                    slippage=slippage
+                                )
+                            except Exception as e:
+                                print(f"Tracker fill update failed: {e}")
+
                         if self.notifier:
                             is_long = trade.signal.signal_type in (SignalType.LONG_DOUBLE_TOUCH,)
                             side = "Buy" if is_long else "Sell"
@@ -298,6 +336,17 @@ class OrderManager:
                             # Order gone but no position = cancelled/expired
                             trade.status = TradeStatus.CANCELLED
                             print(f"Order cancelled/expired: {symbol}")
+
+                            # Record cancellation in tracker
+                            if trade.entry_order_id in self.trade_id_map:
+                                try:
+                                    self.tracker.record_trade_cancelled(
+                                        self.trade_id_map[trade.entry_order_id]
+                                    )
+                                    del self.trade_id_map[trade.entry_order_id]
+                                except Exception as e:
+                                    print(f"Tracker cancel update failed: {e}")
+
                             if self.notifier:
                                 is_long = trade.signal.signal_type in (SignalType.LONG_DOUBLE_TOUCH,)
                                 side = "Buy" if is_long else "Sell"
@@ -376,6 +425,21 @@ class OrderManager:
 
             self.daily_pnl += trade.realized_pnl
 
+        # Record trade close in tracker
+        if trade.entry_order_id in self.trade_id_map:
+            try:
+                exit_reason = trade.status.value.replace('closed_', '')
+                self.tracker.record_trade_closed(
+                    trade_id=self.trade_id_map[trade.entry_order_id],
+                    exit_price=trade.exit_price or 0,
+                    realized_pnl=trade.realized_pnl,
+                    exit_reason=exit_reason,
+                    fees=0  # TODO: Get actual fees from API
+                )
+                del self.trade_id_map[trade.entry_order_id]
+            except Exception as e:
+                print(f"Tracker close update failed: {e}")
+
         print(f"Trade closed: {trade.status.value}, P&L: ${trade.realized_pnl:.2f}")
 
         # Send Telegram notification
@@ -435,6 +499,17 @@ class OrderManager:
                         print(f"Cancelled pending entry order {trade.entry_order_id} for {trade.signal.symbol}")
                     except Exception as e:
                         print(f"Failed to cancel order {trade.entry_order_id}: {e}")
+
+                    # Record cancellation in tracker
+                    if trade.entry_order_id in self.trade_id_map:
+                        try:
+                            self.tracker.record_trade_cancelled(
+                                self.trade_id_map[trade.entry_order_id]
+                            )
+                            del self.trade_id_map[trade.entry_order_id]
+                        except Exception as e:
+                            print(f"Tracker cancel update failed: {e}")
+
                     trade.status = TradeStatus.CANCELLED
                     self.active_trades.remove(trade)
         except Exception as e:
