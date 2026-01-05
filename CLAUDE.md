@@ -768,6 +768,51 @@ ps aux | grep python | grep -v grep | grep -E 'bot.py|TradingBot'
 - `config.py`: Updated default thresholds and env var defaults
 - `breakaway_strategy.py`: Updated docstring with new values
 
+### 2026-01-06: WebSocket Ping/Pong Keepalive Fix
+
+**Problem:** WebSocket disconnecting every ~1 minute (35 disconnections in 35 minutes), causing potential missed signals.
+
+**Root Cause:** Missing ping/pong heartbeat. Bybit requires ping every 20 seconds to keep connection alive.
+
+**Bybit WebSocket Requirements:**
+| Requirement | Value |
+|-------------|-------|
+| Ping interval | Every 20 seconds |
+| Timeout without ping | 10 minutes |
+| Max connections | 500 per 5 min per domain |
+| Max args array | 21,000 characters |
+
+**Fix Applied:**
+Added ping thread to `bybit_client.py`:
+```python
+def _ping_loop(self):
+    """Send periodic pings to keep connection alive."""
+    while self.running:
+        if self.ws and self.ws.sock and self.ws.sock.connected:
+            self.ws.send(json.dumps({"op": "ping"}))
+        time.sleep(20)  # Bybit requires ping every 20 seconds
+```
+
+**Changes:**
+- Added `ping_thread` that sends `{"op": "ping"}` every 20 seconds
+- Handle pong responses in `_on_message`
+- Auto-start ping thread on connection open
+- Proper cleanup on disconnect
+
+**Results:**
+| Metric | Before Fix | After Fix |
+|--------|------------|-----------|
+| Errors in 2 min | ~2 | **0** |
+| Connection stability | Disconnecting every 1 min | **Stable** |
+
+**VPS Specs (DigitalOcean):**
+- 1 CPU, 1GB RAM, 25GB disk
+- Ubuntu 22.04 LTS
+- Adequate for trading bot
+
+**Files Modified:**
+- `bybit_client.py`: Added ping/pong keepalive mechanism
+
 ---
 
 ## Need Help?

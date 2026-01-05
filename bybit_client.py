@@ -302,7 +302,19 @@ class BybitClient:
 
 
 class BybitWebSocket:
-    """Bybit WebSocket Client for real-time data."""
+    """
+    Bybit WebSocket Client for real-time data.
+
+    Features:
+    - Auto-reconnect on disconnect
+    - Ping/pong keepalive every 20 seconds (Bybit requirement)
+    - Multi-timeframe subscription support
+
+    Bybit WebSocket limits:
+    - Ping required every 20 seconds
+    - Max 500 connections per 5 min
+    - Max args array: 21,000 characters
+    """
 
     def __init__(self, config: BotConfig, symbols: List[str] = None, on_kline: Callable = None, on_trade: Callable = None, subscriptions: List[tuple] = None):
         self.config = config
