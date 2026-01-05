@@ -69,7 +69,7 @@ class DataFeed:
         self.symbol = symbol
         self.timeframe = timeframe or config.timeframe  # Allow override
         self.candles: List[Candle] = []
-        self.max_candles = 1000  # Keep last 1000 candles
+        self.max_candles = 2000  # Keep last 2000 candles
         self.on_new_candle: Optional[Callable] = None
 
         # EVWMA state (King strategy)
@@ -88,18 +88,53 @@ class DataFeed:
         self.volume_sum_200 = deque(maxlen=200)
 
     def load_historical(self, limit: int = 200):
-        """Load historical candles from API."""
-        klines = self.client.get_klines(
-            self.symbol,
-            self.timeframe,
-            limit=limit
-        )
+        """Load historical candles from API. Handles limits > 1000 via multiple requests."""
+        import time as time_module
+
+        all_klines = []
+        remaining = limit
+        end_time = None  # Start from most recent
+
+        # Bybit API max is 1000 per request
+        while remaining > 0:
+            batch_size = min(remaining, 1000)
+
+            # Build params
+            params = {
+                "category": self.config.category,
+                "symbol": self.symbol,
+                "interval": self.timeframe,
+                "limit": batch_size
+            }
+            if end_time:
+                params["end"] = end_time
+
+            # Fetch batch
+            result = self.client._request("GET", "/v5/market/kline", params)
+            klines = result.get("list", [])
+
+            if not klines:
+                break
+
+            all_klines.extend(klines)
+            remaining -= len(klines)
+
+            # If we got less than requested, no more data available
+            if len(klines) < batch_size:
+                break
+
+            # Set end_time for next batch (oldest candle time - 1ms)
+            end_time = int(klines[-1][0]) - 1
+
+            # Rate limit between requests
+            if remaining > 0:
+                time_module.sleep(0.3)
 
         # Bybit returns newest first, reverse it
-        klines.reverse()
+        all_klines.reverse()
 
         self.candles = []
-        for k in klines:
+        for k in all_klines:
             candle = Candle(
                 time=int(k[0]),
                 open=float(k[1]),

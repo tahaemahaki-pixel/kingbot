@@ -75,9 +75,18 @@ class BreakawayConfig:
     max_symbols: int = 50
     trade_direction: str = "both"  # "both", "shorts", "longs"
 
-    # Trading
+    # Trading - 5-minute (default)
     max_positions: int = 5
     risk_per_trade: float = 0.02
+
+    # 1-minute timeframe settings
+    enable_1m: bool = True
+    symbols_1m: int = 20                    # Top 20 for 1-min
+    risk_per_trade_1m: float = 0.01         # 1% risk for 1-min
+    max_positions_1m: int = 5               # Max 5 1-min positions
+    min_vol_ratio_1m: float = 3.0           # Stricter 3x volume filter
+    cooldown_1m_minutes: int = 15           # 15-min between 1-min trades
+    candles_preload: int = 2000             # Preload 2000 candles
 
     def __post_init__(self):
         if self.priority_symbols is None:
@@ -104,6 +113,14 @@ class BreakawayConfig:
             trade_direction=os.getenv("BREAKAWAY_DIRECTION", "both"),
             max_positions=int(os.getenv("BREAKAWAY_MAX_POSITIONS", "5")),
             risk_per_trade=float(os.getenv("BREAKAWAY_RISK_PER_TRADE", "0.02")),
+            # 1-minute settings
+            enable_1m=os.getenv("BREAKAWAY_ENABLE_1M", "true").lower() == "true",
+            symbols_1m=int(os.getenv("BREAKAWAY_SYMBOLS_1M", "20")),
+            risk_per_trade_1m=float(os.getenv("BREAKAWAY_RISK_1M", "0.01")),
+            max_positions_1m=int(os.getenv("BREAKAWAY_MAX_POSITIONS_1M", "5")),
+            min_vol_ratio_1m=float(os.getenv("BREAKAWAY_VOL_RATIO_1M", "3.0")),
+            cooldown_1m_minutes=int(os.getenv("BREAKAWAY_COOLDOWN_1M", "15")),
+            candles_preload=int(os.getenv("BREAKAWAY_CANDLES_PRELOAD", "2000")),
         )
 
 
