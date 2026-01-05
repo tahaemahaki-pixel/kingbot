@@ -102,6 +102,13 @@ cd /home/tahae/ai-content/data/Tradingdata/bybit_bot
 
 ## How to START the Bot
 
+**Simple method (bot.py now loads .env automatically):**
+```bash
+cd /root/kingbot
+nohup python3 -u bot.py > double_touch_bot.log 2>&1 &
+```
+
+**Alternative method (explicit dotenv load):**
 ```bash
 nohup python3 -u -c "
 from dotenv import load_dotenv
@@ -239,7 +246,7 @@ TELEGRAM_CHAT_ID=your_chat_id
 
 ```
 bybit_bot/
-├── bot.py                    # Main bot orchestrator
+├── bot.py                    # Double Touch bot orchestrator
 ├── config.py                 # Settings and coin list
 ├── bybit_client.py           # Bybit API client
 ├── data_feed.py              # Price data + indicators
@@ -253,6 +260,11 @@ bybit_bot/
 ├── bot.log                   # Bot logs
 ├── CLAUDE.md                 # This file
 ├── PERFORMANCE_CLI.md        # CLI documentation
+│
+├── # Breakaway Strategy (ACTIVE)
+├── breakaway_bot.py          # Breakaway bot orchestrator
+├── breakaway_strategy.py     # Breakaway signal detection & indicators
+├── symbol_scanner.py         # Top 50 coin fetcher by volume
 │
 ├── # Spread Trading
 ├── spread_strategy.py        # MR Double Touch pattern detection for spreads
@@ -403,6 +415,132 @@ pkill -f TradingBot
 
 ---
 
+## Breakaway Strategy Bot (ACTIVE)
+
+The Breakaway bot trades counter-trend FVG setups across **50 symbols** using volume spikes and Tai Index confirmation.
+
+### Strategy Overview
+
+**Entry Conditions (ALL required):**
+
+| Condition | SHORT | LONG |
+|-----------|-------|------|
+| FVG | Bearish (gap down) | Bullish (gap up) |
+| EWVMA Cradle | 3+ of 5 candles within EWVMA(20) bands | Same |
+| Volume Spike | >= 2.5x 20-period average | Same |
+| Tai Index | > 55 (overbought) | < 45 (oversold) |
+| Trend Filter | Price > EWVMA-200 | Price < EWVMA-200 |
+
+**Exit Rules:**
+- Stop Loss: FVG boundary + 0.1% buffer
+- Take Profit: 3:1 R:R ratio
+
+### Backtest Results
+
+| Direction | Win Rate | Expectancy |
+|-----------|----------|------------|
+| Shorts | 76-93% | +2.0R |
+| Longs | 53-55% | +1.1R |
+
+SOL 5min shorts: 92.9% WR, +2.71R expectancy
+
+### Start Breakaway Bot
+
+```bash
+ssh root@209.38.84.47
+cd /root/kingbot
+
+# Stop any existing bot
+pkill -f breakaway_bot
+pkill -f TradingBot
+
+# Start Breakaway bot
+nohup python3 -u breakaway_bot.py > breakaway_bot.log 2>&1 &
+```
+
+### Monitor Breakaway Bot
+
+| Action | Command |
+|--------|---------|
+| Check if running | `pgrep -f breakaway_bot` |
+| Watch live | `tail -f breakaway_bot.log` |
+| Last 50 lines | `tail -50 breakaway_bot.log` |
+| Stop the bot | `pkill -f breakaway_bot` |
+
+### Understanding Breakaway Output
+
+```
+============================================================
+BREAKAWAY BOT STATUS - 12:05:15
+============================================================
+Symbols: 50
+Active feeds: 46
+Open positions: 0/5
+Total signals: 0
+Executed: 0
+Balance: $215.41
+Equity: $215.41
+============================================================
+```
+
+When a signal triggers:
+```
+============================================================
+NEW BREAKAWAY SIGNAL - SOLUSDT
+============================================================
+  Direction: SHORT
+  Entry: 187.450000
+  Stop Loss: 188.637450
+  Target: 183.887850
+  R:R: 3.0
+  Volume: 3.2x
+  Tai Index: 67
+  Cradle: 4/5
+============================================================
+```
+
+### Breakaway Parameters
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| Symbols | Top 50 by volume | Dynamically fetched |
+| Priority Symbols | SOL, BTC, PNUT, DOGE | Always included |
+| Timeframe | 5 minutes | Default |
+| EWVMA Length | 20 | Cradle detection |
+| EWVMA Trend | 200 | Counter-trend filter |
+| Volume Threshold | 2.5x | Minimum spike |
+| Tai Short | > 55 | Overbought for shorts |
+| Tai Long | < 45 | Oversold for longs |
+| Risk per Trade | 2% | Position sizing |
+| Max Positions | 5 | Concurrent trades |
+| Risk:Reward | 3:1 | Target ratio |
+| Historical Candles | 1000 | Loaded on startup |
+
+### Breakaway Files
+
+| File | Description |
+|------|-------------|
+| `breakaway_bot.py` | Main bot orchestrator |
+| `breakaway_strategy.py` | Signal detection & indicators |
+| `symbol_scanner.py` | Top 50 coin fetcher |
+
+### Environment Variables
+
+Add to `.env` for custom configuration:
+```
+BREAKAWAY_PRIORITY_SYMBOLS=SOLUSDT,BTCUSDT,PNUTUSDT,DOGEUSDT
+BREAKAWAY_MAX_SYMBOLS=50
+BREAKAWAY_DIRECTION=both
+BREAKAWAY_MAX_POSITIONS=5
+BREAKAWAY_RISK_PER_TRADE=0.02
+BREAKAWAY_MIN_VOL_RATIO=2.5
+BREAKAWAY_TAI_SHORT=55.0
+BREAKAWAY_TAI_LONG=45.0
+BREAKAWAY_RISK_REWARD=3.0
+```
+
+---
+
 ## Performance Tracking CLI
 
 The bot includes a comprehensive performance tracking system with SQLite storage and CLI interface.
@@ -451,6 +589,67 @@ data/trading_performance.db
 2. **Monitor regularly** - Check logs daily
 3. **API keys are secret** - Never share .env file
 4. **Testnet first** - Set `BYBIT_TESTNET=true` to practice
+
+---
+
+## Changelog / Fixes
+
+### 2026-01-05: API Authentication & Reliability Fixes
+
+**Problem:** Bot was getting "Position sync error: Empty response from API" and 401 Unauthorized errors.
+
+**Root Cause:** When running `python3 bot.py` directly, the `.env` file wasn't being loaded, so `BYBIT_TESTNET` defaulted to `true`. This caused the bot to use testnet URLs (`api-testnet.bybit.com`) with mainnet API keys, resulting in 401 errors.
+
+**Fixes Applied:**
+
+1. **Added `load_dotenv()` to bot.py** (line 10-13)
+   - Bot now loads `.env` automatically when run directly
+   - No longer need the wrapper script with explicit `load_dotenv()`
+
+2. **Added API retry logic with exponential backoff** (`bybit_client.py`)
+   - 3 retries per request with 0.5s, 1s, 1.5s delays
+   - Handles transient network failures gracefully
+
+3. **Added rate limiting** (`bybit_client.py`)
+   - 500ms minimum between API requests
+   - Thread-safe with locking to prevent concurrent request issues
+   - Prevents hitting Bybit rate limits when running multiple bots
+
+4. **Switched to fresh requests per API call**
+   - Replaced `self.session.get/post` with `requests.get/post`
+   - Avoids session state issues in multi-threaded environment
+
+5. **Removed leverage calls during startup**
+   - Previously set leverage for all 20 symbols on startup (20 API calls)
+   - Leverage is usually already set, so this was unnecessary API load
+
+**Running Both Bots Simultaneously:**
+
+Both Double Touch and Spread Scanner can now run at the same time:
+```bash
+# Terminal 1: Double Touch bot
+cd /root/kingbot
+nohup python3 -u bot.py > double_touch_bot.log 2>&1 &
+
+# Terminal 2: Spread Scanner bot
+nohup python3 -u -c "
+import os
+os.environ['SPREAD_TRADING_ENABLED'] = 'true'
+from dotenv import load_dotenv
+load_dotenv()
+from bot import TradingBot
+from config import BotConfig
+config = BotConfig.from_env()
+config.spread_trading_enabled = True
+config.risk_per_trade = 0.02
+TradingBot(config).start()
+" > spread_bot.log 2>&1 &
+```
+
+**Verify both are running:**
+```bash
+ps aux | grep python | grep -v grep | grep -E 'bot.py|TradingBot'
+```
 
 ---
 

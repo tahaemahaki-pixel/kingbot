@@ -4,12 +4,19 @@ Supports both single-asset Double Touch and dual-leg spread trading.
 """
 import time
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Union
 from enum import Enum
 from bybit_client import BybitClient, Position, Order
 from double_touch_strategy import TradeSignal, SignalType, SignalStatus
 from config import BotConfig, get_asset_type
 from trade_tracker import get_tracker
+
+# Import Breakaway types (optional - may not exist)
+try:
+    from breakaway_strategy import BreakawaySignal, BreakawaySignalType, BreakawayStatus
+    BREAKAWAY_AVAILABLE = True
+except ImportError:
+    BREAKAWAY_AVAILABLE = False
 
 
 class TradeStatus(Enum):
@@ -72,6 +79,7 @@ class OrderManager:
     """Manages order execution and position lifecycle."""
 
     # Minimum qty and step size for each symbol (Bybit USDT Perpetual)
+    # Default fallback: {"min": 0.01, "step": 0.01}
     QTY_RULES = {
         "BTCUSDT": {"min": 0.001, "step": 0.001},
         "ETHUSDT": {"min": 0.01, "step": 0.01},
@@ -93,6 +101,37 @@ class OrderManager:
         "NEARUSDT": {"min": 0.1, "step": 0.1},
         "FILUSDT": {"min": 0.1, "step": 0.1},
         "INJUSDT": {"min": 0.1, "step": 0.1},
+        # Additional coins for Breakaway strategy
+        "MATICUSDT": {"min": 1, "step": 1},
+        "SHIBUSDT": {"min": 1000, "step": 1000},
+        "AAVEUSDT": {"min": 0.01, "step": 0.01},
+        "MKRUSDT": {"min": 0.001, "step": 0.001},
+        "COMPUSDT": {"min": 0.01, "step": 0.01},
+        "ETCUSDT": {"min": 0.1, "step": 0.1},
+        "ALGOUSDT": {"min": 1, "step": 1},
+        "XLMUSDT": {"min": 1, "step": 1},
+        "VETUSDT": {"min": 1, "step": 1},
+        "ICPUSDT": {"min": 0.1, "step": 0.1},
+        "FTMUSDT": {"min": 1, "step": 1},
+        "SANDUSDT": {"min": 1, "step": 1},
+        "MANAUSDT": {"min": 1, "step": 1},
+        "AXSUSDT": {"min": 0.1, "step": 0.1},
+        "GALAUSDT": {"min": 1, "step": 1},
+        "TRXUSDT": {"min": 1, "step": 1},
+        "APEUSDT": {"min": 0.1, "step": 0.1},
+        "LDOUSDT": {"min": 0.1, "step": 0.1},
+        "RNDRUSDT": {"min": 0.1, "step": 0.1},
+        "GMXUSDT": {"min": 0.01, "step": 0.01},
+        "PEPEUSDT": {"min": 100000, "step": 100000},
+        "FLOKIUSDT": {"min": 1000, "step": 1000},
+        "BONKUSDT": {"min": 100000, "step": 100000},
+        "WIFUSDT": {"min": 1, "step": 1},
+        "JUPUSDT": {"min": 1, "step": 1},
+        "PNUTUSDT": {"min": 1, "step": 1},
+        "ONDOUSDT": {"min": 1, "step": 1},
+        "ENAUSDT": {"min": 1, "step": 1},
+        "EIGENUSDT": {"min": 0.1, "step": 0.1},
+        "TRUMPUSDT": {"min": 0.1, "step": 0.1},
     }
 
     def __init__(self, config: BotConfig, client: BybitClient, notifier=None):
@@ -574,6 +613,121 @@ class OrderManager:
     def reset_daily_stats(self):
         """Reset daily statistics (call at start of new day)."""
         self.daily_pnl = 0.0
+
+    # ==================== BREAKAWAY STRATEGY SUPPORT ====================
+
+    def has_position(self, symbol: str) -> bool:
+        """Check if there's an active trade/order for a symbol."""
+        for trade in self.active_trades:
+            if trade.status in (TradeStatus.OPEN, TradeStatus.PENDING_FILL):
+                if trade.signal.symbol == symbol:
+                    return True
+        return False
+
+    def get_open_count(self) -> int:
+        """Get count of open positions and pending orders."""
+        return len([t for t in self.active_trades
+                    if t.status in (TradeStatus.OPEN, TradeStatus.PENDING_FILL)])
+
+    def place_order(
+        self,
+        symbol: str,
+        side: str,
+        qty: float,
+        price: float = None,
+        stop_loss: float = None,
+        take_profit: float = None,
+        order_type: str = "Limit",
+        signal_type: str = "breakaway",
+    ) -> Optional[Order]:
+        """
+        Place a generic order for Breakaway strategy.
+
+        Args:
+            symbol: Trading pair (e.g., BTCUSDT)
+            side: "Buy" or "Sell"
+            qty: Position size (will be rounded to valid step)
+            price: Limit price (required for Limit orders)
+            stop_loss: Stop loss price
+            take_profit: Take profit price
+            order_type: "Limit" or "Market"
+            signal_type: Signal type for tracking
+
+        Returns:
+            Order object if successful, None otherwise
+        """
+        # Round quantity to valid step size
+        reference_price = price if price else self.client.get_last_price(symbol)
+        rounded_qty = self._round_qty(symbol, qty, reference_price)
+
+        try:
+            if order_type == "Limit" and price:
+                order = self.client.place_order(
+                    symbol=symbol,
+                    side=side,
+                    qty=rounded_qty,
+                    order_type="Limit",
+                    price=price,
+                    stop_loss=stop_loss,
+                    take_profit=take_profit
+                )
+            else:
+                order = self.client.place_order(
+                    symbol=symbol,
+                    side=side,
+                    qty=rounded_qty,
+                    order_type="Market",
+                    stop_loss=stop_loss,
+                    take_profit=take_profit
+                )
+
+            # Create a minimal TradeSignal for tracking
+            # This allows reuse of existing trade tracking infrastructure
+            if BREAKAWAY_AVAILABLE:
+                from breakaway_strategy import BreakawaySignal, BreakawaySignalType, BreakawayStatus
+
+                # Create a dummy signal for tracking
+                direction = "short" if side == "Sell" else "long"
+                sig_type = BreakawaySignalType.BREAKAWAY_SHORT if side == "Sell" else BreakawaySignalType.BREAKAWAY_LONG
+
+                # We need to track this as a Trade for position sync
+                # Create a minimal TradeSignal-compatible object
+                class MinimalSignal:
+                    def __init__(self):
+                        self.symbol = symbol
+                        self.entry_price = price or reference_price
+                        self.stop_loss = stop_loss
+                        self.target = take_profit
+                        self.signal_type = SignalType.SHORT_DOUBLE_TOUCH if side == "Sell" else SignalType.LONG_DOUBLE_TOUCH
+                        self.setup_key = f"{symbol}_breakaway"
+                        self.status = SignalStatus.FILLED
+
+                    def get_risk_reward(self):
+                        if self.stop_loss and self.target and self.entry_price:
+                            risk = abs(self.entry_price - self.stop_loss)
+                            reward = abs(self.target - self.entry_price)
+                            return reward / risk if risk > 0 else 0
+                        return 0
+
+                minimal_signal = MinimalSignal()
+
+                # Create trade record for position tracking
+                trade = Trade(
+                    signal=minimal_signal,
+                    status=TradeStatus.PENDING_FILL if order_type == "Limit" else TradeStatus.OPEN,
+                    entry_order_id=order.order_id,
+                    entry_filled_price=price if order_type == "Market" else None,
+                    position_size=rounded_qty,
+                    opened_at=time.time()
+                )
+                self.active_trades.append(trade)
+
+            print(f"Breakaway order placed: {side} {rounded_qty} {symbol} @ {price or 'Market'}")
+            return order
+
+        except Exception as e:
+            print(f"Breakaway order failed: {e}")
+            return None
 
     # ==================== SPREAD TRADING ====================
 

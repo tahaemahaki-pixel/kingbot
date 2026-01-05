@@ -57,6 +57,57 @@ EXTRA_TIMEFRAMES = {
 
 
 @dataclass
+class BreakawayConfig:
+    """Configuration for Breakaway strategy."""
+    # Strategy parameters
+    ewvma_length: int = 20
+    ewvma_trend_length: int = 200
+    min_vol_ratio: float = 2.5
+    tai_threshold_short: float = 55.0
+    tai_threshold_long: float = 45.0
+    min_cradle_candles: int = 3
+    cradle_lookback: int = 5
+    risk_reward: float = 3.0
+    sl_buffer_pct: float = 0.001
+
+    # Symbol management
+    priority_symbols: List[str] = None
+    max_symbols: int = 50
+    trade_direction: str = "both"  # "both", "shorts", "longs"
+
+    # Trading
+    max_positions: int = 5
+    risk_per_trade: float = 0.02
+
+    def __post_init__(self):
+        if self.priority_symbols is None:
+            self.priority_symbols = ["SOLUSDT", "BTCUSDT", "PNUTUSDT", "DOGEUSDT"]
+
+    @classmethod
+    def from_env(cls):
+        """Load from environment variables."""
+        priority = os.getenv("BREAKAWAY_PRIORITY_SYMBOLS", "SOLUSDT,BTCUSDT,PNUTUSDT,DOGEUSDT")
+        priority_list = [s.strip() for s in priority.split(",") if s.strip()]
+
+        return cls(
+            ewvma_length=int(os.getenv("BREAKAWAY_EWVMA_LENGTH", "20")),
+            ewvma_trend_length=int(os.getenv("BREAKAWAY_EWVMA_TREND_LENGTH", "200")),
+            min_vol_ratio=float(os.getenv("BREAKAWAY_MIN_VOL_RATIO", "2.5")),
+            tai_threshold_short=float(os.getenv("BREAKAWAY_TAI_SHORT", "55.0")),
+            tai_threshold_long=float(os.getenv("BREAKAWAY_TAI_LONG", "45.0")),
+            min_cradle_candles=int(os.getenv("BREAKAWAY_MIN_CRADLE", "3")),
+            cradle_lookback=int(os.getenv("BREAKAWAY_CRADLE_LOOKBACK", "5")),
+            risk_reward=float(os.getenv("BREAKAWAY_RISK_REWARD", "3.0")),
+            sl_buffer_pct=float(os.getenv("BREAKAWAY_SL_BUFFER", "0.001")),
+            priority_symbols=priority_list,
+            max_symbols=int(os.getenv("BREAKAWAY_MAX_SYMBOLS", "50")),
+            trade_direction=os.getenv("BREAKAWAY_DIRECTION", "both"),
+            max_positions=int(os.getenv("BREAKAWAY_MAX_POSITIONS", "5")),
+            risk_per_trade=float(os.getenv("BREAKAWAY_RISK_PER_TRADE", "0.02")),
+        )
+
+
+@dataclass
 class SpreadPairConfig:
     """Configuration for a spread trading pair."""
     name: str = "ETH_BTC"
@@ -114,12 +165,17 @@ class BotConfig:
     ema_fast: int = 9
     ema_med: int = 21
     ema_slow: int = 50
-    hh_ll_lookback: int = 20  # Lookback for HH/LL detection
+    hh_ll_lookback: int = 50  # Lookback for HH/LL detection (must be HH/LL in last 50 candles)
     ewvma_filter_length: int = 200
     use_ewvma_filter: bool = True
-    counter_trend_mode: bool = True  # Default: counter-trend (mean reversion)
+    counter_trend_mode: bool = False  # False = trend-aligned (trade with EWVMA-200)
     risk_reward: float = 3.0  # Target R:R ratio
     sl_buffer_pct: float = 0.001  # 0.1% buffer beyond step 3 for SL
+
+    # HTF Directional Filter Settings
+    use_htf_filter: bool = True  # Enable 4H 50 EMA directional filter
+    htf_timeframe_minutes: int = 240  # 4H = 240 minutes
+    htf_ema_length: int = 50  # EMA length on HTF
 
     # Execution
     use_limit_orders: bool = True  # Use limit orders at FVG

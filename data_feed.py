@@ -69,7 +69,7 @@ class DataFeed:
         self.symbol = symbol
         self.timeframe = timeframe or config.timeframe  # Allow override
         self.candles: List[Candle] = []
-        self.max_candles = 500  # Keep last 500 candles
+        self.max_candles = 1000  # Keep last 1000 candles
         self.on_new_candle: Optional[Callable] = None
 
         # EVWMA state (King strategy)
@@ -117,7 +117,7 @@ class DataFeed:
         # Calculate Double Touch indicators
         self._calculate_ema_ribbon()
         self._calculate_ewvma_200()
-        self._detect_hh_ll(lookback=20)
+        self._detect_hh_ll(lookback=50)  # HH/LL must be extreme in last 50 candles
 
         print(f"Loaded {len(self.candles)} historical candles")
 
@@ -250,8 +250,8 @@ class DataFeed:
             self.candles.append(new_candle)
 
             # ===== DOUBLE TOUCH: Detect HH/LL for latest candles =====
-            # Re-detect HH/LL for recent candles (last 25 to cover lookback window)
-            self._detect_hh_ll_recent(lookback=20)
+            # Re-detect HH/LL for recent candles (last 55 to cover lookback window)
+            self._detect_hh_ll_recent(lookback=50)
 
             # Trim to max candles
             if len(self.candles) > self.max_candles:
@@ -567,6 +567,32 @@ class DataFeed:
         else:  # short
             return candle.close > candle.ewvma_200
 
+    def check_ewvma_trend_aligned(self, index: int, direction: str) -> bool:
+        """
+        Check EWVMA-200 trend-aligned filter (trade WITH the trend).
+
+        For LONGS: Price at index must be ABOVE EWVMA-200 (trading with uptrend)
+        For SHORTS: Price at index must be BELOW EWVMA-200 (trading with downtrend)
+
+        Args:
+            index: Candle index to check (typically Step 0)
+            direction: 'long' or 'short'
+
+        Returns:
+            True if trend-aligned filter passes
+        """
+        if index < 0 or index >= len(self.candles):
+            return False
+
+        candle = self.candles[index]
+        if candle.ewvma_200 is None:
+            return False
+
+        if direction == 'long':
+            return candle.close > candle.ewvma_200
+        else:  # short
+            return candle.close < candle.ewvma_200
+
     # ==================== END DOUBLE TOUCH INDICATORS ====================
 
     def to_dataframe(self) -> pd.DataFrame:
@@ -587,6 +613,172 @@ class DataFeed:
         return pd.DataFrame(data)
 
 
+@dataclass
+class HTFCandle:
+    """Higher timeframe candle for HTF filter."""
+    time: int
+    open: float
+    high: float
+    low: float
+    close: float
+    ema50: float = None
+
+
+class HTFDataFeed:
+    """
+    Higher Timeframe Data Feed for directional filter.
+    Resamples lower timeframe data to 4H and calculates 50 EMA.
+    """
+
+    def __init__(self, symbol: str, htf_minutes: int = 240, ema_length: int = 50):
+        self.symbol = symbol
+        self.htf_minutes = htf_minutes  # 240 = 4 hours
+        self.ema_length = ema_length
+        self.candles: List[HTFCandle] = []
+        self.ema_prev = None
+
+        # Buffer for aggregating LTF candles into HTF
+        self.current_htf_open = None
+        self.current_htf_high = None
+        self.current_htf_low = None
+        self.current_htf_close = None
+        self.current_htf_start_time = None
+
+    def _get_htf_period_start(self, timestamp_ms: int) -> int:
+        """Get the start of the HTF period for a given timestamp."""
+        period_ms = self.htf_minutes * 60 * 1000
+        return (timestamp_ms // period_ms) * period_ms
+
+    def _calculate_ema(self, close: float) -> float:
+        """Calculate EMA for new close price."""
+        if self.ema_prev is None:
+            self.ema_prev = close
+            return close
+
+        multiplier = 2 / (self.ema_length + 1)
+        ema = (close - self.ema_prev) * multiplier + self.ema_prev
+        self.ema_prev = ema
+        return ema
+
+    def initialize_from_ltf(self, ltf_candles: List[Candle]):
+        """
+        Initialize HTF feed from lower timeframe candles.
+        Groups LTF candles into HTF periods and calculates EMA.
+        """
+        if not ltf_candles:
+            return
+
+        # Group candles by HTF period
+        htf_periods = {}
+        for candle in ltf_candles:
+            period_start = self._get_htf_period_start(candle.time)
+            if period_start not in htf_periods:
+                htf_periods[period_start] = []
+            htf_periods[period_start].append(candle)
+
+        # Create HTF candles from grouped periods
+        self.candles = []
+        self.ema_prev = None
+
+        for period_start in sorted(htf_periods.keys()):
+            period_candles = htf_periods[period_start]
+
+            htf_candle = HTFCandle(
+                time=period_start,
+                open=period_candles[0].open,
+                high=max(c.high for c in period_candles),
+                low=min(c.low for c in period_candles),
+                close=period_candles[-1].close
+            )
+            htf_candle.ema50 = self._calculate_ema(htf_candle.close)
+            self.candles.append(htf_candle)
+
+        # Set up buffer for ongoing candle
+        if ltf_candles:
+            last_ltf = ltf_candles[-1]
+            self.current_htf_start_time = self._get_htf_period_start(last_ltf.time)
+
+            # Find all LTF candles in current HTF period
+            current_period_candles = [c for c in ltf_candles
+                                       if self._get_htf_period_start(c.time) == self.current_htf_start_time]
+            if current_period_candles:
+                self.current_htf_open = current_period_candles[0].open
+                self.current_htf_high = max(c.high for c in current_period_candles)
+                self.current_htf_low = min(c.low for c in current_period_candles)
+                self.current_htf_close = current_period_candles[-1].close
+
+    def update(self, ltf_candle: Candle) -> bool:
+        """
+        Update HTF feed with new LTF candle.
+        Returns True if a new HTF candle was completed.
+        """
+        period_start = self._get_htf_period_start(ltf_candle.time)
+
+        # New HTF period started
+        if period_start != self.current_htf_start_time:
+            # Complete the previous HTF candle
+            if self.current_htf_start_time is not None and self.current_htf_close is not None:
+                htf_candle = HTFCandle(
+                    time=self.current_htf_start_time,
+                    open=self.current_htf_open,
+                    high=self.current_htf_high,
+                    low=self.current_htf_low,
+                    close=self.current_htf_close
+                )
+                htf_candle.ema50 = self._calculate_ema(htf_candle.close)
+                self.candles.append(htf_candle)
+
+                # Keep only last 100 HTF candles
+                if len(self.candles) > 100:
+                    self.candles = self.candles[-100:]
+
+            # Start new HTF period
+            self.current_htf_start_time = period_start
+            self.current_htf_open = ltf_candle.open
+            self.current_htf_high = ltf_candle.high
+            self.current_htf_low = ltf_candle.low
+            self.current_htf_close = ltf_candle.close
+            return True
+
+        # Update current HTF candle
+        self.current_htf_high = max(self.current_htf_high or 0, ltf_candle.high)
+        self.current_htf_low = min(self.current_htf_low or float('inf'), ltf_candle.low)
+        self.current_htf_close = ltf_candle.close
+        return False
+
+    def get_bias(self) -> str:
+        """
+        Get current HTF bias based on price vs EMA50.
+        Returns: 'long' if price > EMA50, 'short' if price < EMA50, 'neutral' otherwise.
+        """
+        if not self.candles:
+            return 'neutral'
+
+        last_htf = self.candles[-1]
+        if last_htf.ema50 is None:
+            return 'neutral'
+
+        # Use current close if available, otherwise use last completed candle
+        current_close = self.current_htf_close or last_htf.close
+
+        if current_close > last_htf.ema50:
+            return 'long'
+        elif current_close < last_htf.ema50:
+            return 'short'
+        else:
+            return 'neutral'
+
+    def get_ema50(self) -> Optional[float]:
+        """Get current HTF EMA50 value."""
+        if not self.candles:
+            return None
+        return self.candles[-1].ema50
+
+    def get_current_close(self) -> Optional[float]:
+        """Get current HTF close price."""
+        return self.current_htf_close
+
+
 if __name__ == "__main__":
     # Test data feed
     config = BotConfig(testnet=True, timeframe="5")
@@ -604,3 +796,11 @@ if __name__ == "__main__":
 
     swings = feed.find_swing_points(3)
     print(f"\nFound {len(swings)} swing points")
+
+    # Test HTF feed
+    print("\n--- Testing HTF Feed ---")
+    htf_feed = HTFDataFeed("BTCUSDT", htf_minutes=240)
+    htf_feed.initialize_from_ltf(feed.candles)
+    print(f"HTF candles: {len(htf_feed.candles)}")
+    print(f"HTF Bias: {htf_feed.get_bias()}")
+    print(f"HTF EMA50: {htf_feed.get_ema50()}")
