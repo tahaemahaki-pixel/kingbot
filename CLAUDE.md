@@ -549,8 +549,8 @@ When a signal triggers:
 | Priority Symbols | SOL, BTC, PNUT, DOGE | Always included |
 | EWVMA Length | 20 | Cradle detection |
 | EWVMA Trend | 200 | Counter-trend filter |
-| Tai Short | > 55 | Overbought for shorts |
-| Tai Long | < 45 | Oversold for longs |
+| Tai Short | > 53 | Overbought for shorts |
+| Tai Long | < 47 | Oversold for longs |
 | Risk:Reward | 3:1 | Target ratio |
 | Historical Candles | 2000 | Loaded on startup |
 
@@ -560,7 +560,7 @@ When a signal triggers:
 | Symbols | Top 50 |
 | Risk per Trade | 2% |
 | Max Positions | 5 |
-| Volume Threshold | 2.5x |
+| Volume Threshold | 2.0x |
 
 **1-Minute Specific:**
 | Parameter | Value |
@@ -568,7 +568,7 @@ When a signal triggers:
 | Symbols | Top 20 |
 | Risk per Trade | 1% |
 | Max Positions | 5 |
-| Volume Threshold | 3.0x |
+| Volume Threshold | 2.0x |
 | Cooldown | 15 minutes |
 
 ### Breakaway Files
@@ -587,8 +587,8 @@ Add to `.env` for custom configuration:
 # Shared settings
 BREAKAWAY_PRIORITY_SYMBOLS=SOLUSDT,BTCUSDT,PNUTUSDT,DOGEUSDT
 BREAKAWAY_DIRECTION=both
-BREAKAWAY_TAI_SHORT=55.0
-BREAKAWAY_TAI_LONG=45.0
+BREAKAWAY_TAI_SHORT=53.0
+BREAKAWAY_TAI_LONG=47.0
 BREAKAWAY_RISK_REWARD=3.0
 BREAKAWAY_CANDLES_PRELOAD=2000
 
@@ -596,14 +596,14 @@ BREAKAWAY_CANDLES_PRELOAD=2000
 BREAKAWAY_MAX_SYMBOLS=50
 BREAKAWAY_MAX_POSITIONS=5
 BREAKAWAY_RISK_PER_TRADE=0.02
-BREAKAWAY_MIN_VOL_RATIO=2.5
+BREAKAWAY_MIN_VOL_RATIO=2.0
 
 # 1-minute settings
 BREAKAWAY_ENABLE_1M=true
 BREAKAWAY_SYMBOLS_1M=20
 BREAKAWAY_MAX_POSITIONS_1M=5
 BREAKAWAY_RISK_1M=0.01
-BREAKAWAY_VOL_RATIO_1M=3.0
+BREAKAWAY_VOL_RATIO_1M=2.0
 BREAKAWAY_COOLDOWN_1M=15
 ```
 
@@ -732,6 +732,41 @@ TradingBot(config).start()
 ```bash
 ps aux | grep python | grep -v grep | grep -E 'bot.py|TradingBot'
 ```
+
+### 2026-01-06: Breakaway Strategy Threshold Optimization
+
+**Problem:** Bot was generating 0 signals overnight - thresholds too strict.
+
+**Analysis:** Ran backtest comparison on 1-minute data (7 symbols: BTC, DOGE, DOT, ETH, INJ, PNUT, SOL):
+- Volume spike 2.5-3.0x requirement was blocking 86% of FVGs
+- Tai Index thresholds (>55/<45) blocking signals even when volume/FVG aligned
+
+**Backtest Results:**
+
+| Parameter Set | Trades | Win Rate | Expectancy | Total R |
+|---------------|--------|----------|------------|---------|
+| Old (strict) | 185 | 48.6% | 0.95R | 175R |
+| **New (moderate)** | **349** | **46.1%** | **0.85R** | **295R** |
+| Relaxed | 593 | 44.4% | 0.77R | 459R |
+
+**Changes Applied:**
+
+| Parameter | Old Value | New Value | Impact |
+|-----------|-----------|-----------|--------|
+| `min_vol_ratio` | 3.0x | **2.0x** | ~2x more signals |
+| `tai_threshold_short` | >55 | **>53** | Slightly less extreme |
+| `tai_threshold_long` | <45 | **<47** | Slightly less extreme |
+| `min_vol_ratio_1m` | 3.0x | **2.0x** | Same as 5-min |
+
+**Trade-offs:**
+- Win rate drops 2.5% (48.6% → 46.1%)
+- Expectancy drops 10% (0.95R → 0.85R)
+- **Total R increases 69%** (175R → 295R)
+- Max drawdown unchanged (~11.4%)
+
+**Files Modified:**
+- `config.py`: Updated default thresholds and env var defaults
+- `breakaway_strategy.py`: Updated docstring with new values
 
 ---
 

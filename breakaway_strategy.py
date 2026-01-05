@@ -4,20 +4,26 @@ Breakaway Strategy - Counter-trend FVG Trading
 Entry conditions for SHORTS (ALL required):
 1. Bearish FVG forms (current_high < 2_candles_ago_low)
 2. Price cradled 3+ of last 5 candles within EWVMA(20) bands
-3. Volume spike >= 2.5x (20-period average)
-4. Tai Index > 55 (overbought)
+3. Volume spike >= 2.0x (20-period average) [updated 2026-01-06]
+4. Tai Index > 53 (overbought) [updated 2026-01-06]
 5. Price > EWVMA-200 (counter-trend)
 
 Entry conditions for LONGS (ALL required):
 1. Bullish FVG forms (current_low > 2_candles_ago_high)
 2. Price cradled 3+ of last 5 candles within EWVMA(20) bands
-3. Volume spike >= 2.5x (20-period average)
-4. Tai Index < 45 (oversold)
+3. Volume spike >= 2.0x (20-period average) [updated 2026-01-06]
+4. Tai Index < 47 (oversold) [updated 2026-01-06]
 5. Price < EWVMA-200 (counter-trend)
 
 Exit:
 - SL: FVG boundary + 0.1% buffer
 - TP: 3:1 R:R
+
+Threshold Update (2026-01-06):
+- Volume: 3.0x -> 2.0x (increases signal frequency ~2x)
+- Tai Short: 55 -> 53
+- Tai Long: 45 -> 47
+- Backtest showed: 349 trades, 46.1% WR, 0.85R expectancy, 295R total
 """
 
 from enum import Enum

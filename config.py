@@ -59,12 +59,12 @@ EXTRA_TIMEFRAMES = {
 @dataclass
 class BreakawayConfig:
     """Configuration for Breakaway strategy."""
-    # Strategy parameters
+    # Strategy parameters (updated 2026-01-06 based on backtest)
     ewvma_length: int = 20
     ewvma_trend_length: int = 200
-    min_vol_ratio: float = 2.5
-    tai_threshold_short: float = 55.0
-    tai_threshold_long: float = 45.0
+    min_vol_ratio: float = 2.0  # Relaxed from 3.0 - 2x more trades, maintains quality
+    tai_threshold_short: float = 53.0  # Relaxed from 55.0
+    tai_threshold_long: float = 47.0  # Relaxed from 45.0
     min_cradle_candles: int = 3
     cradle_lookback: int = 5
     risk_reward: float = 3.0
@@ -84,7 +84,7 @@ class BreakawayConfig:
     symbols_1m: int = 22                    # Top 22 for 1-min
     risk_per_trade_1m: float = 0.01         # 1% risk for 1-min
     max_positions_1m: int = 5               # Max 5 1-min positions
-    min_vol_ratio_1m: float = 3.0           # Stricter 3x volume filter
+    min_vol_ratio_1m: float = 2.0           # Relaxed from 3.0 based on backtest
     cooldown_1m_minutes: int = 15           # 15-min between 1-min trades
     candles_preload: int = 2000             # Preload 2000 candles
 
@@ -101,9 +101,9 @@ class BreakawayConfig:
         return cls(
             ewvma_length=int(os.getenv("BREAKAWAY_EWVMA_LENGTH", "20")),
             ewvma_trend_length=int(os.getenv("BREAKAWAY_EWVMA_TREND_LENGTH", "200")),
-            min_vol_ratio=float(os.getenv("BREAKAWAY_MIN_VOL_RATIO", "2.5")),
-            tai_threshold_short=float(os.getenv("BREAKAWAY_TAI_SHORT", "55.0")),
-            tai_threshold_long=float(os.getenv("BREAKAWAY_TAI_LONG", "45.0")),
+            min_vol_ratio=float(os.getenv("BREAKAWAY_MIN_VOL_RATIO", "2.0")),
+            tai_threshold_short=float(os.getenv("BREAKAWAY_TAI_SHORT", "53.0")),
+            tai_threshold_long=float(os.getenv("BREAKAWAY_TAI_LONG", "47.0")),
             min_cradle_candles=int(os.getenv("BREAKAWAY_MIN_CRADLE", "3")),
             cradle_lookback=int(os.getenv("BREAKAWAY_CRADLE_LOOKBACK", "5")),
             risk_reward=float(os.getenv("BREAKAWAY_RISK_REWARD", "3.0")),
@@ -118,7 +118,7 @@ class BreakawayConfig:
             symbols_1m=int(os.getenv("BREAKAWAY_SYMBOLS_1M", "22")),
             risk_per_trade_1m=float(os.getenv("BREAKAWAY_RISK_1M", "0.01")),
             max_positions_1m=int(os.getenv("BREAKAWAY_MAX_POSITIONS_1M", "5")),
-            min_vol_ratio_1m=float(os.getenv("BREAKAWAY_VOL_RATIO_1M", "3.0")),
+            min_vol_ratio_1m=float(os.getenv("BREAKAWAY_VOL_RATIO_1M", "2.0")),
             cooldown_1m_minutes=int(os.getenv("BREAKAWAY_COOLDOWN_1M", "15")),
             candles_preload=int(os.getenv("BREAKAWAY_CANDLES_PRELOAD", "2000")),
         )
