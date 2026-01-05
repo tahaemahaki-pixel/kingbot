@@ -415,9 +415,22 @@ pkill -f TradingBot
 
 ---
 
-## Breakaway Strategy Bot (ACTIVE)
+## Breakaway Strategy Bot (ACTIVE) - Multi-Timeframe
 
-The Breakaway bot trades counter-trend FVG setups across **50 symbols** using volume spikes and Tai Index confirmation.
+The Breakaway bot trades counter-trend FVG setups on **BOTH 5-minute and 1-minute timeframes** simultaneously using volume spikes and Tai Index confirmation.
+
+### Multi-Timeframe Overview
+
+| Parameter | 5-Minute | 1-Minute |
+|-----------|----------|----------|
+| **Symbols** | Top 50 by volume | Top 20 by volume |
+| **Risk per trade** | 2% | 1% |
+| **Max positions** | 5 | 5 |
+| **Volume filter** | 2.5x | 3.0x (stricter) |
+| **Cooldown** | None | 15 minutes between trades |
+| **Candles preload** | 2000 | 2000 |
+
+**Total max exposure:** 10 positions (5 per timeframe)
 
 ### Strategy Overview
 
@@ -427,7 +440,7 @@ The Breakaway bot trades counter-trend FVG setups across **50 symbols** using vo
 |-----------|-------|------|
 | FVG | Bearish (gap down) | Bullish (gap up) |
 | EWVMA Cradle | 3+ of 5 candles within EWVMA(20) bands | Same |
-| Volume Spike | >= 2.5x 20-period average | Same |
+| Volume Spike | >= 2.5x (5m) or 3.0x (1m) | Same |
 | Tai Index | > 55 (overbought) | < 45 (oversold) |
 | Trend Filter | Price > EWVMA-200 | Price < EWVMA-200 |
 
@@ -437,12 +450,21 @@ The Breakaway bot trades counter-trend FVG setups across **50 symbols** using vo
 
 ### Backtest Results
 
+**5-Minute Timeframe:**
 | Direction | Win Rate | Expectancy |
 |-----------|----------|------------|
 | Shorts | 76-93% | +2.0R |
 | Longs | 53-55% | +1.1R |
 
 SOL 5min shorts: 92.9% WR, +2.71R expectancy
+
+**1-Minute Timeframe (3x volume filter):**
+| Metric | Value |
+|--------|-------|
+| Total Trades | 185 |
+| Win Rate | 48.6% |
+| Expectancy | +0.95R |
+| Total R | +175R |
 
 ### Start Breakaway Bot
 
@@ -454,7 +476,7 @@ cd /root/kingbot
 pkill -f breakaway_bot
 pkill -f TradingBot
 
-# Start Breakaway bot
+# Start Breakaway bot (multi-timeframe)
 nohup python3 -u breakaway_bot.py > breakaway_bot.log 2>&1 &
 ```
 
@@ -471,22 +493,31 @@ nohup python3 -u breakaway_bot.py > breakaway_bot.log 2>&1 &
 
 ```
 ============================================================
-BREAKAWAY BOT STATUS - 12:05:15
+BREAKAWAY BOT STATUS - 12:55:18
 ============================================================
-Symbols: 50
-Active feeds: 46
-Open positions: 0/5
-Total signals: 0
-Executed: 0
-Balance: $215.41
-Equity: $215.41
+
+5-MIN TIMEFRAME:
+  Symbols: 46
+  Positions: 0/5
+  Signals: 0 | Executed: 0
+
+1-MIN TIMEFRAME:
+  Symbols: 21
+  Positions: 0/5
+  Signals: 0 | Executed: 0
+  Cooldown: Ready
+
+ACCOUNT:
+  Balance: $215.41
+  Equity: $215.41
+  Total Open: 0
 ============================================================
 ```
 
 When a signal triggers:
 ```
 ============================================================
-NEW BREAKAWAY SIGNAL - SOLUSDT
+[5-MIN] NEW BREAKAWAY SIGNAL - SOLUSDT
 ============================================================
   Direction: SHORT
   Entry: 187.450000
@@ -495,48 +526,99 @@ NEW BREAKAWAY SIGNAL - SOLUSDT
   R:R: 3.0
   Volume: 3.2x
   Tai Index: 67
-  Cradle: 4/5
+============================================================
+
+============================================================
+[1-MIN] NEW BREAKAWAY SIGNAL - BTCUSDT
+============================================================
+  Direction: LONG
+  Entry: 42150.00
+  Stop Loss: 42050.00
+  Target: 42450.00
+  R:R: 3.0
+  Volume: 3.5x (3x filter)
+  Tai Index: 38
 ============================================================
 ```
 
 ### Breakaway Parameters
 
+**Shared Parameters:**
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| Symbols | Top 50 by volume | Dynamically fetched |
 | Priority Symbols | SOL, BTC, PNUT, DOGE | Always included |
-| Timeframe | 5 minutes | Default |
 | EWVMA Length | 20 | Cradle detection |
 | EWVMA Trend | 200 | Counter-trend filter |
-| Volume Threshold | 2.5x | Minimum spike |
 | Tai Short | > 55 | Overbought for shorts |
 | Tai Long | < 45 | Oversold for longs |
-| Risk per Trade | 2% | Position sizing |
-| Max Positions | 5 | Concurrent trades |
 | Risk:Reward | 3:1 | Target ratio |
-| Historical Candles | 1000 | Loaded on startup |
+| Historical Candles | 2000 | Loaded on startup |
+
+**5-Minute Specific:**
+| Parameter | Value |
+|-----------|-------|
+| Symbols | Top 50 |
+| Risk per Trade | 2% |
+| Max Positions | 5 |
+| Volume Threshold | 2.5x |
+
+**1-Minute Specific:**
+| Parameter | Value |
+|-----------|-------|
+| Symbols | Top 20 |
+| Risk per Trade | 1% |
+| Max Positions | 5 |
+| Volume Threshold | 3.0x |
+| Cooldown | 15 minutes |
 
 ### Breakaway Files
 
 | File | Description |
 |------|-------------|
-| `breakaway_bot.py` | Main bot orchestrator |
+| `breakaway_bot.py` | Main bot orchestrator (multi-timeframe) |
 | `breakaway_strategy.py` | Signal detection & indicators |
-| `symbol_scanner.py` | Top 50 coin fetcher |
+| `symbol_scanner.py` | Top coin fetcher by volume |
+| `backtest_1min_breakaway.py` | 1-minute backtest script |
 
 ### Environment Variables
 
 Add to `.env` for custom configuration:
 ```
+# Shared settings
 BREAKAWAY_PRIORITY_SYMBOLS=SOLUSDT,BTCUSDT,PNUTUSDT,DOGEUSDT
-BREAKAWAY_MAX_SYMBOLS=50
 BREAKAWAY_DIRECTION=both
-BREAKAWAY_MAX_POSITIONS=5
-BREAKAWAY_RISK_PER_TRADE=0.02
-BREAKAWAY_MIN_VOL_RATIO=2.5
 BREAKAWAY_TAI_SHORT=55.0
 BREAKAWAY_TAI_LONG=45.0
 BREAKAWAY_RISK_REWARD=3.0
+BREAKAWAY_CANDLES_PRELOAD=2000
+
+# 5-minute settings
+BREAKAWAY_MAX_SYMBOLS=50
+BREAKAWAY_MAX_POSITIONS=5
+BREAKAWAY_RISK_PER_TRADE=0.02
+BREAKAWAY_MIN_VOL_RATIO=2.5
+
+# 1-minute settings
+BREAKAWAY_ENABLE_1M=true
+BREAKAWAY_SYMBOLS_1M=20
+BREAKAWAY_MAX_POSITIONS_1M=5
+BREAKAWAY_RISK_1M=0.01
+BREAKAWAY_VOL_RATIO_1M=3.0
+BREAKAWAY_COOLDOWN_1M=15
+```
+
+### 1-Minute Cooldown Logic
+
+The 15-minute cooldown prevents overtrading on the faster timeframe:
+- After a 1-min trade executes, no new 1-min trades for 15 minutes
+- 5-min trades are unaffected by the cooldown
+- Cooldown status shown in bot status display
+
+```
+1-MIN TIMEFRAME:
+  Cooldown: 12.5min remaining    # After recent trade
+  Cooldown: Ready                # Can take new trades
+  Cooldown: Ready (last: 18min ago)  # Shows time since last trade
 ```
 
 ---
