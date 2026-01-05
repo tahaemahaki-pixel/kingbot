@@ -315,10 +315,18 @@ class BybitWebSocket:
         self.on_trade = on_trade
         self.running = False
         self.thread = None
+        self.ping_thread = None
+        self.last_pong_time = 0
+        self.ping_interval = 20  # Bybit requires ping every 20 seconds
 
     def _on_message(self, ws, message):
         """Handle incoming WebSocket message."""
         data = json.loads(message)
+
+        # Handle pong response
+        if data.get("op") == "pong" or data.get("ret_msg") == "pong":
+            self.last_pong_time = time.time()
+            return
 
         if "topic" in data:
             topic = data["topic"]
@@ -349,6 +357,19 @@ class BybitWebSocket:
                     for trade in data.get("data", []):
                         self.on_trade(trade)
 
+    def _ping_loop(self):
+        """Send periodic pings to keep connection alive."""
+        while self.running:
+            try:
+                if self.ws and self.ws.sock and self.ws.sock.connected:
+                    ping_msg = json.dumps({"op": "ping"})
+                    self.ws.send(ping_msg)
+                time.sleep(self.ping_interval)
+            except Exception as e:
+                # Connection might be closed, will reconnect
+                if self.running:
+                    time.sleep(1)
+
     def _on_error(self, ws, error):
         """Handle WebSocket error."""
         print(f"WebSocket Error: {error}")
@@ -364,6 +385,12 @@ class BybitWebSocket:
     def _on_open(self, ws):
         """Handle WebSocket open."""
         print("WebSocket Connected")
+        self.last_pong_time = time.time()
+
+        # Start ping thread if not already running
+        if self.ping_thread is None or not self.ping_thread.is_alive():
+            self.ping_thread = threading.Thread(target=self._ping_loop, daemon=True)
+            self.ping_thread.start()
 
         # Subscribe to klines - use subscriptions if provided, otherwise default behavior
         if self.subscriptions:
@@ -398,8 +425,12 @@ class BybitWebSocket:
     def disconnect(self):
         """Disconnect from WebSocket."""
         self.running = False
+        # Ping thread will exit on next iteration since self.running is False
         if self.ws:
             self.ws.close()
+        # Wait for ping thread to finish
+        if self.ping_thread and self.ping_thread.is_alive():
+            self.ping_thread.join(timeout=2)
 
 
 if __name__ == "__main__":
