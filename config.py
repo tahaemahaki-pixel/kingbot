@@ -72,7 +72,7 @@ class BreakawayConfig:
 
     # Symbol management
     priority_symbols: List[str] = None
-    max_symbols: int = 50
+    max_symbols: int = 22
     trade_direction: str = "both"  # "both", "shorts", "longs"
 
     # Trading - 5-minute (default)
@@ -81,7 +81,7 @@ class BreakawayConfig:
 
     # 1-minute timeframe settings
     enable_1m: bool = True
-    symbols_1m: int = 20                    # Top 20 for 1-min
+    symbols_1m: int = 22                    # Top 22 for 1-min
     risk_per_trade_1m: float = 0.01         # 1% risk for 1-min
     max_positions_1m: int = 5               # Max 5 1-min positions
     min_vol_ratio_1m: float = 3.0           # Stricter 3x volume filter
@@ -109,13 +109,13 @@ class BreakawayConfig:
             risk_reward=float(os.getenv("BREAKAWAY_RISK_REWARD", "3.0")),
             sl_buffer_pct=float(os.getenv("BREAKAWAY_SL_BUFFER", "0.001")),
             priority_symbols=priority_list,
-            max_symbols=int(os.getenv("BREAKAWAY_MAX_SYMBOLS", "50")),
+            max_symbols=int(os.getenv("BREAKAWAY_MAX_SYMBOLS", "22")),
             trade_direction=os.getenv("BREAKAWAY_DIRECTION", "both"),
             max_positions=int(os.getenv("BREAKAWAY_MAX_POSITIONS", "5")),
             risk_per_trade=float(os.getenv("BREAKAWAY_RISK_PER_TRADE", "0.02")),
             # 1-minute settings
             enable_1m=os.getenv("BREAKAWAY_ENABLE_1M", "true").lower() == "true",
-            symbols_1m=int(os.getenv("BREAKAWAY_SYMBOLS_1M", "20")),
+            symbols_1m=int(os.getenv("BREAKAWAY_SYMBOLS_1M", "22")),
             risk_per_trade_1m=float(os.getenv("BREAKAWAY_RISK_1M", "0.01")),
             max_positions_1m=int(os.getenv("BREAKAWAY_MAX_POSITIONS_1M", "5")),
             min_vol_ratio_1m=float(os.getenv("BREAKAWAY_VOL_RATIO_1M", "3.0")),
