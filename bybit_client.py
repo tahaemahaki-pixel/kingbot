@@ -43,6 +43,9 @@ class BybitClient:
         self.config = config
         self.base_url = BYBIT_TESTNET if config.testnet else BYBIT_MAINNET
         self.session = requests.Session()
+        self._last_request_time = 0
+        self._min_request_interval = 0.5  # 500ms between requests (conservative for multiple bots)
+        self._request_lock = threading.Lock()
 
     def _generate_signature(self, param_str: str, timestamp: int) -> str:
         """Generate HMAC SHA256 signature."""
@@ -53,42 +56,67 @@ class BybitClient:
             hashlib.sha256
         ).hexdigest()
 
-    def _request(self, method: str, endpoint: str, params: Dict = None, signed: bool = False) -> Dict:
-        """Make API request."""
+    def _request(self, method: str, endpoint: str, params: Dict = None, signed: bool = False, retries: int = 3) -> Dict:
+        """Make API request with retry logic and rate limiting."""
         url = f"{self.base_url}{endpoint}"
         params = params or {}
 
-        headers = {"Content-Type": "application/json"}
+        last_error = None
+        for attempt in range(retries):
+            try:
+                # Rate limiting with lock
+                with self._request_lock:
+                    elapsed = time.time() - self._last_request_time
+                    if elapsed < self._min_request_interval:
+                        time.sleep(self._min_request_interval - elapsed)
+                    self._last_request_time = time.time()
 
-        if signed:
-            timestamp = int(time.time() * 1000)
+                headers = {"Content-Type": "application/json"}
 
-            if method == "GET":
-                # For GET: use query string format
-                param_str = "&".join([f"{k}={v}" for k, v in sorted(params.items())])
-            else:
-                # For POST: use JSON string
-                param_str = json.dumps(params)
+                if signed:
+                    timestamp = int(time.time() * 1000)
 
-            signature = self._generate_signature(param_str, timestamp)
-            headers.update({
-                "X-BAPI-API-KEY": self.config.api_key,
-                "X-BAPI-SIGN": signature,
-                "X-BAPI-TIMESTAMP": str(timestamp),
-                "X-BAPI-RECV-WINDOW": "5000"
-            })
+                    if method == "GET":
+                        # For GET: use query string format
+                        param_str = "&".join([f"{k}={v}" for k, v in sorted(params.items())])
+                    else:
+                        # For POST: use JSON string
+                        param_str = json.dumps(params)
 
-        if method == "GET":
-            response = self.session.get(url, params=params, headers=headers)
-        else:
-            response = self.session.post(url, json=params, headers=headers)
+                    signature = self._generate_signature(param_str, timestamp)
+                    headers.update({
+                        "X-BAPI-API-KEY": self.config.api_key,
+                        "X-BAPI-SIGN": signature,
+                        "X-BAPI-TIMESTAMP": str(timestamp),
+                        "X-BAPI-RECV-WINDOW": "5000"
+                    })
 
-        data = response.json()
+                # Use fresh session for each request to avoid threading issues
+                if method == "GET":
+                    response = requests.get(url, params=params, headers=headers, timeout=10)
+                else:
+                    response = requests.post(url, json=params, headers=headers, timeout=10)
 
-        if data.get("retCode") != 0:
-            raise Exception(f"Bybit API Error: {data.get('retMsg')}")
+                # Handle empty or invalid responses
+                if not response.text or response.text.strip() == "":
+                    raise Exception(f"Empty response from API (status={response.status_code}): {endpoint}")
 
-        return data.get("result", {})
+                try:
+                    data = response.json()
+                except json.JSONDecodeError as e:
+                    raise Exception(f"Invalid JSON from API: {endpoint} - {response.text[:100]}")
+
+                if data.get("retCode") != 0:
+                    raise Exception(f"Bybit API Error: {data.get('retMsg')}")
+
+                return data.get("result", {})
+
+            except Exception as e:
+                last_error = e
+                if attempt < retries - 1:
+                    time.sleep(0.5 * (attempt + 1))  # Exponential backoff: 0.5s, 1s, 1.5s
+                    continue
+                raise last_error
 
     # ===== Market Data =====
 

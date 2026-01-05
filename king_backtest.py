@@ -137,7 +137,197 @@ def load_data(filepath: str, evwma_length: int = 20) -> pd.DataFrame:
             df['ribbon_upper'] = calc_evwma(df['high'], df['vol'], evwma_length)
             df['ribbon_lower'] = calc_evwma(df['low'], df['vol'], evwma_length)
 
+    # Calculate 300 SMA for trend filter
+    df['sma300'] = df['close'].rolling(window=300).mean()
+
+    # Calculate 50 EMA for trend filter
+    df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
+
+    # Calculate EWVMA-200 for counter-trend filter (like Double Touch)
+    if 'vol' in df.columns:
+        df['ewvma_200'] = calc_evwma(df['close'], df['vol'], 200)
+    else:
+        # Fallback to SMA-200 if no volume
+        df['ewvma_200'] = df['close'].rolling(window=200).mean()
+
     return df
+
+
+def get_short_wick_target(df: pd.DataFrame, swing_idx: int, swing_type: str) -> float:
+    """
+    Get the short wick level from the 2 candles forming the swing point.
+
+    For swing HIGH (long TP): Use body top (max of open/close) - more conservative than absolute high
+    For swing LOW (short TP): Use body bottom (min of open/close) - more conservative than absolute low
+
+    Args:
+        df: DataFrame with OHLC data
+        swing_idx: Index of the swing point candle
+        swing_type: 'high' or 'low'
+
+    Returns:
+        The short wick target price
+    """
+    # Get the swing candle and the one before it (the 2 candles forming the swing)
+    idx1 = max(0, swing_idx - 1)
+    idx2 = swing_idx
+
+    candle1 = df.iloc[idx1]
+    candle2 = df.iloc[idx2]
+
+    if swing_type == 'high':
+        # For swing high: use body top (short wick level)
+        # Body top = max(open, close)
+        body_top1 = max(candle1['open'], candle1['close'])
+        body_top2 = max(candle2['open'], candle2['close'])
+        # Use the lower of the two for more conservative TP
+        return min(body_top1, body_top2)
+    else:
+        # For swing low: use body bottom (short wick level)
+        # Body bottom = min(open, close)
+        body_bottom1 = min(candle1['open'], candle1['close'])
+        body_bottom2 = min(candle2['open'], candle2['close'])
+        # Use the higher of the two for more conservative TP
+        return max(body_bottom1, body_bottom2)
+
+
+def check_trend_filter(df: pd.DataFrame, start_idx: int, end_idx: int, direction: str, threshold: float = 0.8) -> bool:
+    """
+    Check if at least threshold% of candles are above/below 300 SMA.
+
+    Args:
+        df: DataFrame with 'close' and 'sma300' columns
+        start_idx: Start index of the pattern (A point)
+        end_idx: End index of the pattern (G point)
+        direction: 'long' or 'short'
+        threshold: Percentage of candles required (default 0.8 = 80%)
+
+    Returns:
+        True if trend filter passes, False otherwise
+    """
+    if start_idx >= end_idx:
+        return False
+
+    subset = df.iloc[start_idx:end_idx + 1]
+
+    # Skip if SMA not calculated yet (not enough data)
+    if subset['sma300'].isna().all():
+        return False
+
+    valid_rows = subset.dropna(subset=['sma300'])
+    if len(valid_rows) == 0:
+        return False
+
+    if direction == 'long':
+        # For longs: count candles where close > sma300
+        above_count = (valid_rows['close'] > valid_rows['sma300']).sum()
+        pct_above = above_count / len(valid_rows)
+        return pct_above >= threshold
+    else:
+        # For shorts: count candles where close < sma300
+        below_count = (valid_rows['close'] < valid_rows['sma300']).sum()
+        pct_below = below_count / len(valid_rows)
+        return pct_below >= threshold
+
+
+def check_ema50_filter(df: pd.DataFrame, start_idx: int, end_idx: int, direction: str, threshold: float = 0.8) -> bool:
+    """
+    Check if at least threshold% of candles are above/below the 50 EMA.
+    """
+    if start_idx >= end_idx:
+        return False
+
+    subset = df.iloc[start_idx:end_idx + 1]
+
+    if subset['ema50'].isna().all():
+        return False
+
+    valid_rows = subset.dropna(subset=['ema50'])
+    if len(valid_rows) == 0:
+        return False
+
+    if direction == 'long':
+        above_count = (valid_rows['close'] > valid_rows['ema50']).sum()
+        return (above_count / len(valid_rows)) >= threshold
+    else:
+        below_count = (valid_rows['close'] < valid_rows['ema50']).sum()
+        return (below_count / len(valid_rows)) >= threshold
+
+
+def check_evwma_filter(df: pd.DataFrame, start_idx: int, end_idx: int, direction: str, threshold: float = 0.8) -> bool:
+    """
+    Check if at least threshold% of candles are above/below the EVWMA ribbon midpoint.
+
+    Args:
+        df: DataFrame with 'close', 'ribbon_upper', 'ribbon_lower' columns
+        start_idx: Start index of the pattern (A point)
+        end_idx: End index of the pattern (G point)
+        direction: 'long' or 'short'
+        threshold: Percentage of candles required (default 0.8 = 80%)
+
+    Returns:
+        True if EVWMA filter passes, False otherwise
+    """
+    if start_idx >= end_idx:
+        return False
+
+    subset = df.iloc[start_idx:end_idx + 1]
+
+    # Skip if ribbon not calculated yet
+    if subset['ribbon_upper'].isna().all() or subset['ribbon_lower'].isna().all():
+        return False
+
+    valid_rows = subset.dropna(subset=['ribbon_upper', 'ribbon_lower'])
+    if len(valid_rows) == 0:
+        return False
+
+    # Calculate ribbon midpoint
+    ribbon_mid = (valid_rows['ribbon_upper'] + valid_rows['ribbon_lower']) / 2
+
+    if direction == 'long':
+        # For longs: count candles where close > ribbon midpoint
+        above_count = (valid_rows['close'] > ribbon_mid).sum()
+        pct_above = above_count / len(valid_rows)
+        return pct_above >= threshold
+    else:
+        # For shorts: count candles where close < ribbon midpoint
+        below_count = (valid_rows['close'] < ribbon_mid).sum()
+        pct_below = below_count / len(valid_rows)
+        return pct_below >= threshold
+
+
+def check_ewvma_counter_trend(df: pd.DataFrame, a_idx: int, direction: str) -> bool:
+    """
+    Counter-trend filter using EWVMA-200 (like Double Touch strategy).
+
+    For longs: A point (step 0) must be BELOW EWVMA-200 (mean reversion from oversold)
+    For shorts: A point (step 0) must be ABOVE EWVMA-200 (mean reversion from overbought)
+
+    Args:
+        df: DataFrame with 'close' and 'ewvma_200' columns
+        a_idx: Index of point A (the start of the pattern)
+        direction: 'long' or 'short'
+
+    Returns:
+        True if counter-trend filter passes, False otherwise
+    """
+    if a_idx >= len(df):
+        return False
+
+    # Get the close price and EWVMA-200 at point A
+    a_close = df.iloc[a_idx]['close']
+    ewvma_200 = df.iloc[a_idx]['ewvma_200']
+
+    # Skip if EWVMA not calculated yet
+    if pd.isna(ewvma_200):
+        return False
+
+    if direction == 'long':
+        # Counter-trend: A must be BELOW EWVMA-200 (catching oversold reversals)
+        return a_close < ewvma_200
+    else:
+        # Counter-trend: A must be ABOVE EWVMA-200 (catching overbought reversals)
+        return a_close > ewvma_200
 
 
 def find_swing_points(df: pd.DataFrame, lookback: int = 5) -> List[SwingPoint]:
@@ -280,7 +470,7 @@ def is_below_ribbon(close: float, ribbon_lower: float) -> bool:
     return close < ribbon_lower
 
 
-def find_short_king_patterns(df: pd.DataFrame, swings: List[SwingPoint], symbol: str = "") -> List[Dict]:
+def find_short_king_patterns(df: pd.DataFrame, swings: List[SwingPoint], symbol: str = "", filter_type: str = "sma300") -> List[Dict]:
     """
     Find Short King patterns:
     A: Swing high INTO ribbon (resistance)
@@ -289,6 +479,8 @@ def find_short_king_patterns(df: pd.DataFrame, swings: List[SwingPoint], symbol:
     E: Higher high above D
     F: Close below ribbon
     G: Entry zone
+
+    filter_type: 'none', 'sma300', or 'evwma'
     """
     patterns = []
     swing_highs = [s for s in swings if s.type == 'high']
@@ -381,6 +573,18 @@ def find_short_king_patterns(df: pd.DataFrame, swings: List[SwingPoint], symbol:
             else:
                 stop_loss = e_swing.price * 1.001  # Just above E's high (structure)
 
+            # Apply trend filter based on filter_type
+            if filter_type == 'sma300':
+                if not check_trend_filter(df, a.index, g_idx, 'short', threshold=0.8):
+                    continue
+            elif filter_type == 'evwma':
+                if not check_evwma_filter(df, a.index, g_idx, 'short', threshold=0.8):
+                    continue
+            elif filter_type == 'ewvma_counter':
+                if not check_ewvma_counter_trend(df, a.index, 'short'):
+                    continue
+            # filter_type == 'none' - no filter applied
+
             patterns.append({
                 'type': 'short_king',
                 'a': a,
@@ -400,7 +604,7 @@ def find_short_king_patterns(df: pd.DataFrame, swings: List[SwingPoint], symbol:
     return patterns
 
 
-def find_long_king_patterns(df: pd.DataFrame, swings: List[SwingPoint], symbol: str = "") -> List[Dict]:
+def find_long_king_patterns(df: pd.DataFrame, swings: List[SwingPoint], symbol: str = "", filter_type: str = "sma300") -> List[Dict]:
     """
     Find Long King patterns:
     A: Swing low INTO ribbon (support)
@@ -409,6 +613,8 @@ def find_long_king_patterns(df: pd.DataFrame, swings: List[SwingPoint], symbol: 
     E: Lower low below D
     F: Close above ribbon
     G: Entry zone
+
+    filter_type: 'none', 'sma300', or 'evwma'
     """
     patterns = []
     swing_highs = [s for s in swings if s.type == 'high']
@@ -500,6 +706,18 @@ def find_long_king_patterns(df: pd.DataFrame, swings: List[SwingPoint], symbol: 
                 stop_loss = e_swing.candle_open * 0.999  # Just below E candle open
             else:
                 stop_loss = e_swing.price * 0.999  # Just below E's low (structure)
+
+            # Apply trend filter based on filter_type
+            if filter_type == 'sma300':
+                if not check_trend_filter(df, a.index, g_idx, 'long', threshold=0.8):
+                    continue
+            elif filter_type == 'evwma':
+                if not check_evwma_filter(df, a.index, g_idx, 'long', threshold=0.8):
+                    continue
+            elif filter_type == 'ewvma_counter':
+                if not check_ewvma_counter_trend(df, a.index, 'long'):
+                    continue
+            # filter_type == 'none' - no filter applied
 
             patterns.append({
                 'type': 'long_king',
@@ -824,16 +1042,24 @@ def extract_symbol(filepath: str) -> str:
 
 def main():
     import sys
-    # Load data - accept file path from command line or use default
-    if len(sys.argv) > 1:
-        filepath = sys.argv[1]
-    else:
-        filepath = "BATS_MSFT, 240_ae198.csv"
+    import argparse
+
+    parser = argparse.ArgumentParser(description='King Pattern Backtest')
+    parser.add_argument('filepath', nargs='?', default="BATS_MSFT, 240_ae198.csv",
+                        help='Path to CSV file with OHLCV data')
+    parser.add_argument('--filter', '-f', choices=['none', 'sma300', 'evwma', 'ewvma_counter'],
+                        default='sma300', help='Filter type (default: sma300)')
+    parser.add_argument('--min-rr', type=float, default=0.0, help='Minimum R:R ratio (default: 0)')
+
+    args = parser.parse_args()
+    filepath = args.filepath
+    filter_type = args.filter
 
     # Extract symbol for SL logic
     symbol = extract_symbol(filepath)
     print(f"Loading data from: {filepath}")
     print(f"Symbol detected: {symbol} (ETH uses candle open SL, others use structure SL)")
+    print(f"Filter type: {filter_type}")
 
     df = load_data(filepath)
     print(f"Loaded {len(df)} candles from {df.iloc[0]['time']} to {df.iloc[-1]['time']}")
@@ -844,21 +1070,20 @@ def main():
     print(f"Found {len(swings)} swing points ({len([s for s in swings if s.type == 'high'])} highs, {len([s for s in swings if s.type == 'low'])} lows)")
 
     # Find patterns (pass symbol for SL logic)
-    print("\nScanning for Short King patterns...")
-    short_patterns = find_short_king_patterns(df, swings, symbol)
+    print(f"\nScanning for Short King patterns (filter: {filter_type})...")
+    short_patterns = find_short_king_patterns(df, swings, symbol, filter_type=filter_type)
     print(f"Found {len(short_patterns)} Short King patterns")
 
-    print("\nScanning for Long King patterns...")
-    long_patterns = find_long_king_patterns(df, swings, symbol)
+    print(f"\nScanning for Long King patterns (filter: {filter_type})...")
+    long_patterns = find_long_king_patterns(df, swings, symbol, filter_type=filter_type)
     print(f"Found {len(long_patterns)} Long King patterns")
 
     all_patterns = short_patterns + long_patterns
     all_patterns.sort(key=lambda x: x['g_idx'])
 
     # Simulate trades (FVG filter is now built into pattern detection)
-    MIN_RR = 0.0  # No R:R filter - let's see how FVG alone performs
-    print(f"\nSimulating trades (FVG entry required)...")
-    trades = simulate_trades(df, all_patterns, min_rr=MIN_RR)
+    print(f"\nSimulating trades (FVG entry required, min R:R={args.min_rr})...")
+    trades = simulate_trades(df, all_patterns, min_rr=args.min_rr)
 
     # Print results
     print_results(trades)

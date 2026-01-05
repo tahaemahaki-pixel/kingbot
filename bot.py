@@ -2,14 +2,19 @@
 Double Touch Strategy Trading Bot - Multi-Symbol, Multi-Timeframe Scanner
 Supports both single-asset Double Touch and spread trading modes.
 """
+import os
 import time
 import signal
 import sys
 from datetime import datetime
+from dotenv import load_dotenv
+
+# Load .env file before any config imports
+load_dotenv()
 from typing import Optional, Dict, List, Tuple
 from config import BotConfig, EXTRA_TIMEFRAMES
 from bybit_client import BybitClient, BybitWebSocket
-from data_feed import DataFeed, Candle
+from data_feed import DataFeed, Candle, HTFDataFeed
 from double_touch_strategy import DoubleTouchStrategy, SignalStatus, TradeSignal
 from order_manager import OrderManager
 from notifier import TelegramNotifier
@@ -67,6 +72,7 @@ class TradingBot:
 
         # Per-setup components (keyed by "SYMBOL_TIMEFRAME")
         self.feeds: Dict[str, DataFeed] = {}
+        self.htf_feeds: Dict[str, HTFDataFeed] = {}  # HTF feeds for directional filter
         self.strategies: Dict[str, DoubleTouchStrategy] = {}
 
         # Shared components
@@ -109,6 +115,8 @@ class TradingBot:
         if not self.spread_mode:
             print(f"Max positions: {self.config.max_positions} (crypto: {self.config.max_crypto_positions}, non-crypto: {self.config.max_non_crypto_positions})")
             print(f"Risk/Reward: {self.config.risk_reward}:1")
+            if self.config.use_htf_filter:
+                print(f"HTF Filter: {self.config.htf_timeframe_minutes}min ({self.config.htf_timeframe_minutes // 60}H) EMA-{self.config.htf_ema_length}")
         print("=" * 60)
 
         # Setup signal handlers
@@ -133,35 +141,42 @@ class TradingBot:
 
                 # Only create Double Touch strategies in normal mode
                 if not self.spread_mode:
+                    # Create HTF feed for directional filter if enabled
+                    htf_feed = None
+                    if self.config.use_htf_filter:
+                        htf_feed = HTFDataFeed(
+                            symbol=symbol,
+                            htf_minutes=self.config.htf_timeframe_minutes,
+                            ema_length=self.config.htf_ema_length
+                        )
+                        # Initialize HTF feed from LTF candles
+                        for candle in feed.candles:
+                            htf_feed.update(candle)
+                        self.htf_feeds[setup_key] = htf_feed
+
                     strategy = DoubleTouchStrategy(
                         feed,
                         risk_reward=self.config.risk_reward,
                         sl_buffer_pct=self.config.sl_buffer_pct,
                         use_ewvma_filter=self.config.use_ewvma_filter,
                         counter_trend_mode=self.config.counter_trend_mode,
-                        max_wait_candles=self.config.fvg_max_wait_candles
+                        max_wait_candles=self.config.fvg_max_wait_candles,
+                        htf_feed=htf_feed,
+                        use_htf_filter=self.config.use_htf_filter
                     )
                     self.strategies[setup_key] = strategy
 
-                print(f"  ✓ {symbol}@{timeframe}m: {len(feed.candles)} candles loaded")
+                htf_status = ""
+                if setup_key in self.htf_feeds:
+                    htf = self.htf_feeds[setup_key]
+                    htf_status = f" | HTF: {len(htf.candles)} 4H candles, bias={htf.get_bias()}"
+                print(f"  ✓ {symbol}@{timeframe}m: {len(feed.candles)} candles loaded{htf_status}")
 
-                # Set max leverage per symbol (only once per symbol)
-                if symbol not in unique_symbols:
-                    unique_symbols.add(symbol)
-                    MAX_LEVERAGE = {
-                        'BTCUSDT': 100, 'ETHUSDT': 100, 'SOLUSDT': 75, 'XRPUSDT': 75,
-                        'DOGEUSDT': 75, 'ADAUSDT': 75, 'AVAXUSDT': 50, 'LINKUSDT': 50,
-                        'DOTUSDT': 50, 'SUIUSDT': 50, 'LTCUSDT': 50, 'BCHUSDT': 50,
-                        'ATOMUSDT': 50, 'UNIUSDT': 50, 'APTUSDT': 50, 'ARBUSDT': 50,
-                        'OPUSDT': 50, 'NEARUSDT': 50, 'FILUSDT': 25, 'INJUSDT': 50,
-                    }
-                    try:
-                        self.client.set_leverage(symbol, MAX_LEVERAGE.get(symbol, 50))
-                    except:
-                        pass  # Leverage might already be set
+                # Track unique symbols (leverage will be set on first trade if needed)
+                unique_symbols.add(symbol)
 
                 # Rate limit - don't hammer the API
-                time.sleep(0.1)
+                time.sleep(0.2)
 
             except Exception as e:
                 print(f"  ✗ {symbol}@{timeframe}m: Failed to load - {e}")
@@ -242,6 +257,11 @@ class TradingBot:
             return
 
         new_candle = self.feeds[setup_key].candles[-1]
+
+        # Update HTF feed with new candle data
+        if setup_key in self.htf_feeds:
+            self.htf_feeds[setup_key].update(new_candle)
+
         self._on_new_candle(setup_key, new_candle)
 
     def _on_new_candle(self, setup_key: str, candle: Candle):

@@ -97,7 +97,9 @@ class DoubleTouchStrategy:
         sl_buffer_pct: float = 0.001,
         use_ewvma_filter: bool = True,
         counter_trend_mode: bool = True,
-        max_wait_candles: int = 20
+        max_wait_candles: int = 20,
+        htf_feed=None,  # Optional HTFDataFeed for directional filter
+        use_htf_filter: bool = True
     ):
         self.feed = data_feed
         self.risk_reward = risk_reward
@@ -105,6 +107,8 @@ class DoubleTouchStrategy:
         self.use_ewvma_filter = use_ewvma_filter
         self.counter_trend_mode = counter_trend_mode
         self.max_wait_candles = max_wait_candles
+        self.htf_feed = htf_feed
+        self.use_htf_filter = use_htf_filter
 
         self.active_signals: List[TradeSignal] = []
 
@@ -201,9 +205,23 @@ class DoubleTouchStrategy:
             fvg = self.feed.find_fvg(state.step_3_idx, i + 1, 'bullish')
 
             if fvg is not None:
-                # Apply EWVMA counter-trend filter
+                # Apply EWVMA filter (counter-trend or trend-aligned based on mode)
                 if self.use_ewvma_filter:
-                    if not self.feed.check_ewvma_counter_trend(state.step_0_idx, 'long'):
+                    if self.counter_trend_mode:
+                        # Counter-trend: longs when price < EWVMA (mean reversion)
+                        if not self.feed.check_ewvma_counter_trend(state.step_0_idx, 'long'):
+                            state.reset()
+                            return None
+                    else:
+                        # Trend-aligned: longs when price > EWVMA (with the trend)
+                        if not self.feed.check_ewvma_trend_aligned(state.step_0_idx, 'long'):
+                            state.reset()
+                            return None
+
+                # Apply HTF directional filter - only take longs when HTF is bullish
+                if self.use_htf_filter and self.htf_feed is not None:
+                    htf_bias = self.htf_feed.get_bias()
+                    if htf_bias != 'long':
                         state.reset()
                         return None
 
@@ -301,9 +319,23 @@ class DoubleTouchStrategy:
             fvg = self.feed.find_fvg(state.step_3_idx, i + 1, 'bearish')
 
             if fvg is not None:
-                # Apply EWVMA counter-trend filter
+                # Apply EWVMA filter (counter-trend or trend-aligned based on mode)
                 if self.use_ewvma_filter:
-                    if not self.feed.check_ewvma_counter_trend(state.step_0_idx, 'short'):
+                    if self.counter_trend_mode:
+                        # Counter-trend: shorts when price > EWVMA (mean reversion)
+                        if not self.feed.check_ewvma_counter_trend(state.step_0_idx, 'short'):
+                            state.reset()
+                            return None
+                    else:
+                        # Trend-aligned: shorts when price < EWVMA (with the trend)
+                        if not self.feed.check_ewvma_trend_aligned(state.step_0_idx, 'short'):
+                            state.reset()
+                            return None
+
+                # Apply HTF directional filter - only take shorts when HTF is bearish
+                if self.use_htf_filter and self.htf_feed is not None:
+                    htf_bias = self.htf_feed.get_bias()
+                    if htf_bias != 'short':
                         state.reset()
                         return None
 
