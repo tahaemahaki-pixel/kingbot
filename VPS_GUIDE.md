@@ -1,107 +1,276 @@
-# Double Touch Bot VPS Quick-Start Guide
+# Trading Bot VPS Guide
 
-## How to Connect to Your VPS
-
-1. Open Terminal (Mac/Linux) or PowerShell (Windows)
-2. Type this and press Enter:
-   ```
-   ssh root@209.38.84.47
-   ```
-3. You're now connected when you see: `root@ubuntu-s-1vcpu-1gb-syd1-01:~#`
+Quick reference for managing trading bots on VPS.
 
 ---
 
-## Bot Commands (run these on the VPS)
+## Quick Reference Card
 
-| What you want to do | Command |
-|---------------------|---------|
-| **See live logs** | `journalctl -u doubletouchbot -f` |
-| **Stop watching logs** | Press `Ctrl+C` |
-| **Check if bot is running** | `systemctl status doubletouchbot` |
-| **Stop the bot** | `systemctl stop doubletouchbot` |
-| **Start the bot** | `systemctl start doubletouchbot` |
-| **Restart the bot** | `systemctl restart doubletouchbot` |
-| **Disconnect from VPS** | Type `exit` and press Enter |
+### Breakaway Bot (ACTIVE)
+
+| Action | Command |
+|--------|---------|
+| Connect to VPS | `ssh root@209.38.84.47` |
+| Go to bot folder | `cd /root/kingbot` |
+| Check if running | `pgrep -f breakaway_bot` |
+| Start bot | `nohup python3 -u breakaway_bot.py > breakaway_bot.log 2>&1 &` |
+| Stop bot | `pkill -f breakaway_bot` |
+| Restart bot | `pkill -f breakaway_bot && sleep 2 && nohup python3 -u breakaway_bot.py > breakaway_bot.log 2>&1 &` |
+| Watch live logs | `tail -f breakaway_bot.log` |
+| Last 50 lines | `tail -50 breakaway_bot.log` |
+| Search signals | `grep -i "signal" breakaway_bot.log` |
+| Search errors | `grep -i "error" breakaway_bot.log` |
+
+### Double Touch Bot (Legacy - systemd)
+
+| Action | Command |
+|--------|---------|
+| Check status | `systemctl status doubletouchbot` |
+| Start | `systemctl start doubletouchbot` |
+| Stop | `systemctl stop doubletouchbot` |
+| Restart | `systemctl restart doubletouchbot` |
+| View logs | `journalctl -u doubletouchbot -f` |
 
 ---
 
-## Common Tasks
+## Connect to VPS
 
-### Check if the bot is running
 ```bash
-systemctl status doubletouchbot
-```
-- **Active (running)** = Bot is working
-- **Inactive (dead)** = Bot is stopped
-
-### View what the bot is doing (live)
-```bash
-journalctl -u doubletouchbot -f
-```
-This shows real-time updates. Press `Ctrl+C` to stop watching (bot keeps running).
-
-### View last 50 lines of logs
-```bash
-journalctl -u doubletouchbot -n 50
+ssh root@209.38.84.47
 ```
 
-### View logs from last hour
+Then go to bot folder:
 ```bash
-journalctl -u doubletouchbot --since "1 hour ago"
-```
-
-### Restart after making changes
-```bash
-systemctl restart doubletouchbot
+cd /root/kingbot
 ```
 
 ---
 
-## Important Info
+# Breakaway Bot Commands
 
-| Item | Value |
-|------|-------|
-| VPS IP | `209.38.84.47` |
-| Bot location | `/root/kingbot/` |
-| Config file | `/root/kingbot/.env` |
-| Service name | `doubletouchbot` |
-| Strategy | Double Touch (counter-trend) |
-| Timeframe | 5-minute candles |
-| Symbols | 20 crypto coins |
+## Check if Running
 
----
-
-## Strategy Settings
-
-| Setting | Value |
-|---------|-------|
-| EMA Ribbon | 9/21/50 |
-| EWVMA Filter | 200-period (counter-trend) |
-| Risk:Reward | 3:1 |
-| Risk per trade | 1% |
-| Max positions | 5 (3 crypto + 2 non-crypto) |
-
----
-
-## Edit API Keys
-
-If you need to change your Bybit or Telegram keys:
-
-1. Connect to VPS
-2. Run: `nano /root/kingbot/.env`
-3. Make changes
-4. Save: `Ctrl+O` then `Enter` then `Ctrl+X`
-5. Restart bot: `systemctl restart doubletouchbot`
-
-### .env File Contents
+```bash
+pgrep -f breakaway_bot
 ```
-BYBIT_API_KEY=your_api_key
-BYBIT_API_SECRET=your_api_secret
-BYBIT_TESTNET=false
-TRADING_TIMEFRAME=5
-RISK_PER_TRADE=0.01
-TELEGRAM_TOKEN=your_telegram_token
-TELEGRAM_CHAT_ID=your_chat_id
+
+- **Numbers shown** = Bot IS running (process IDs)
+- **Blank/empty** = Bot is NOT running
+
+## Start the Bot
+
+```bash
+cd /root/kingbot
+nohup python3 -u breakaway_bot.py > breakaway_bot.log 2>&1 &
+```
+
+Verify:
+```bash
+pgrep -f breakaway_bot
+```
+
+## Stop the Bot
+
+```bash
+pkill -f breakaway_bot
+```
+
+## Restart the Bot
+
+```bash
+pkill -f breakaway_bot && sleep 2 && nohup python3 -u breakaway_bot.py > breakaway_bot.log 2>&1 &
+```
+
+---
+
+## View Logs
+
+### Last 50 lines
+```bash
+tail -50 breakaway_bot.log
+```
+
+### Watch live (Ctrl+C to stop)
+```bash
+tail -f breakaway_bot.log
+```
+
+### Search for signals
+```bash
+grep -i "signal" breakaway_bot.log | tail -20
+```
+
+### Search for trades/orders
+```bash
+grep -i "trade\|order\|executed" breakaway_bot.log | tail -20
+```
+
+### Search for errors
+```bash
+grep -i "error" breakaway_bot.log | tail -20
+```
+
+### Count WebSocket errors (should be 0)
+```bash
+grep -c "WebSocket" breakaway_bot.log
+```
+
+---
+
+## Check Account
+
+### Balance
+```bash
+python3 -c "
+from dotenv import load_dotenv
+load_dotenv()
+from bybit_client import BybitClient
+from config import BotConfig
+c = BybitClient(BotConfig.from_env())
+print(f'Balance: \${c.get_available_balance():.2f}')
+print(f'Equity: \${c.get_equity():.2f}')
+"
+```
+
+### Open Positions
+```bash
+python3 -c "
+from dotenv import load_dotenv
+load_dotenv()
+from bybit_client import BybitClient
+from config import BotConfig
+c = BybitClient(BotConfig.from_env())
+pos = c.get_positions()
+if pos:
+    for p in pos:
+        print(f'{p.symbol}: {p.side} {p.size} @ {p.entry_price:.4f} PnL: \${p.unrealized_pnl:.2f}')
+else:
+    print('No open positions')
+"
+```
+
+### Recent Closed Trades
+```bash
+python3 -c "
+from dotenv import load_dotenv
+load_dotenv()
+from bybit_client import BybitClient
+from config import BotConfig
+c = BybitClient(BotConfig.from_env())
+trades = c.get_closed_pnl(limit=10)
+total = 0
+for t in trades:
+    pnl = float(t.get('closedPnl', 0))
+    total += pnl
+    print(f\"{t.get('symbol')}: {t.get('side')} PnL: \${pnl:.2f}\")
+print(f'---\\nTotal: \${total:.2f}')
+"
+```
+
+---
+
+## Understanding Log Output
+
+### Normal Status Update (every 5 min)
+```
+============================================================
+BREAKAWAY BOT STATUS - 12:55:18
+============================================================
+
+5-MIN TIMEFRAME:
+  Symbols: 22
+  Positions: 0/5
+  Signals: 0 | Executed: 0
+
+1-MIN TIMEFRAME:
+  Symbols: 22
+  Positions: 0/5
+  Signals: 0 | Executed: 0
+  Cooldown: Ready
+
+ACCOUNT:
+  Balance: $215.54
+  Equity: $215.54
+  Total Open: 0
+============================================================
+```
+
+### When a Signal Triggers
+```
+============================================================
+[5-MIN] NEW BREAKAWAY SIGNAL - SOLUSDT
+============================================================
+  Direction: SHORT
+  Entry: 187.450000
+  Stop Loss: 188.637450
+  Target: 183.887850
+  R:R: 3.0
+  Volume: 3.2x
+  Tai Index: 67
+============================================================
+```
+
+---
+
+## Breakaway Strategy Settings
+
+| Parameter | 5-Minute | 1-Minute |
+|-----------|----------|----------|
+| Symbols | 22 | 22 |
+| Risk per trade | 2% | 1% |
+| Max positions | 5 | 5 |
+| Volume filter | ≥2.0x | ≥2.0x |
+| Tai short | >53 | >53 |
+| Tai long | <47 | <47 |
+| Cooldown | None | 15 min |
+| R:R Target | 3:1 | 3:1 |
+
+### Signal Conditions (ALL must align)
+
+**For SHORT:**
+1. Bearish FVG (price gap down)
+2. Tai Index > 53 (overbought)
+3. Volume ≥ 2.0x average
+4. Cradle: 3+ of 5 candles in EWVMA(20) bands
+5. Price ABOVE EWVMA-200 (counter-trend)
+
+**For LONG:**
+1. Bullish FVG (price gap up)
+2. Tai Index < 47 (oversold)
+3. Volume ≥ 2.0x average
+4. Cradle: 3+ of 5 candles in EWVMA(20) bands
+5. Price BELOW EWVMA-200 (counter-trend)
+
+---
+
+## One-Liner Commands (from local machine)
+
+### Full status check
+```bash
+ssh root@209.38.84.47 "cd /root/kingbot && pgrep -f breakaway_bot && tail -30 breakaway_bot.log"
+```
+
+### Quick balance check
+```bash
+ssh root@209.38.84.47 "cd /root/kingbot && python3 -c \"from dotenv import load_dotenv; load_dotenv(); from bybit_client import BybitClient; from config import BotConfig; c=BybitClient(BotConfig.from_env()); print(f'Balance: \\\${c.get_available_balance():.2f}')\""
+```
+
+### Restart bot remotely
+```bash
+ssh root@209.38.84.47 "cd /root/kingbot && pkill -f breakaway_bot; sleep 2; nohup python3 -u breakaway_bot.py > breakaway_bot.log 2>&1 &; sleep 1; pgrep -f breakaway_bot && echo 'Bot started'"
+```
+
+---
+
+## Deploy Updates
+
+From local machine:
+```bash
+# Copy files to VPS
+scp breakaway_bot.py breakaway_strategy.py config.py bybit_client.py root@209.38.84.47:/root/kingbot/
+
+# Restart bot
+ssh root@209.38.84.47 "cd /root/kingbot && pkill -f breakaway_bot && sleep 2 && nohup python3 -u breakaway_bot.py > breakaway_bot.log 2>&1 &"
 ```
 
 ---
@@ -109,144 +278,94 @@ TELEGRAM_CHAT_ID=your_chat_id
 ## Troubleshooting
 
 ### Bot not starting?
-Check the logs for errors:
+Run in foreground to see errors:
 ```bash
-journalctl -u doubletouchbot -n 100
+python3 breakaway_bot.py
+```
+(Ctrl+C to stop, then start with nohup)
+
+### Check if .env is loaded
+```bash
+python3 -c "
+from dotenv import load_dotenv
+load_dotenv()
+import os
+key = os.getenv('BYBIT_API_KEY', '')
+print(f'API Key: {\"Yes\" if key else \"No\"} ({len(key)} chars)')
+print(f'Testnet: {os.getenv(\"BYBIT_TESTNET\", \"not set\")}')
+"
 ```
 
-### Need to update the bot?
+### WebSocket disconnecting?
+Check error count:
 ```bash
-cd /root/kingbot
-git pull
-systemctl restart doubletouchbot
+grep -c "WebSocket\|Disconn\|Reconnect" breakaway_bot.log
+```
+Should be 0 or very low.
+
+### No signals for a long time?
+Normal! Strategy needs 5 conditions to align:
+- FVG + Tai extreme + Volume spike + Cradle + Counter-trend
+
+---
+
+## VPS Details
+
+| Item | Value |
+|------|-------|
+| IP | 209.38.84.47 |
+| Provider | DigitalOcean |
+| Specs | 1 CPU, 1GB RAM, 25GB disk |
+| OS | Ubuntu 22.04 LTS |
+| Bot path | `/root/kingbot/` |
+| Log file | `/root/kingbot/breakaway_bot.log` |
+| Config | `/root/kingbot/.env` |
+
+---
+
+## Edit Configuration
+
+```bash
+nano /root/kingbot/.env
 ```
 
-### Check for Python errors
-```bash
-cd /root/kingbot
-python3 -c "from bot import TradingBot; print('OK')"
+Save: `Ctrl+O` → `Enter` → `Ctrl+X`
+
+Then restart bot.
+
+### .env Contents
 ```
-
-### VPS not responding?
-Go to DigitalOcean dashboard and use the web console, or reboot the droplet.
-
-### Bot keeps restarting?
-Check if there's a crash loop:
-```bash
-journalctl -u doubletouchbot --since "10 minutes ago" | grep -i error
+BYBIT_API_KEY=your_key
+BYBIT_API_SECRET=your_secret
+BYBIT_TESTNET=false
+TELEGRAM_TOKEN=your_token
+TELEGRAM_CHAT_ID=your_chat_id
 ```
 
 ---
 
-## Understanding Log Output
-
-### Startup Messages
-```
-Double Touch Strategy Bot - Multi-Symbol, Multi-Timeframe
-Setups: 20 (symbol+timeframe combinations)
-Max positions: 5 (crypto: 3, non-crypto: 2)
-Risk/Reward: 3.0:1
-```
-
-### Signal Found
-```
-[BTCUSDT_5] long_double_touch: Entry=97500.00 SL=97000.00 TP=99000.00 R:R=3.00
-```
-- `BTCUSDT_5` = Symbol @ 5min timeframe
-- `long_double_touch` = Buy signal (short = sell)
-- `Entry` = Where order will be placed
-- `SL` = Stop loss level
-- `TP` = Take profit level
-- `R:R` = Risk:Reward ratio
-
-### Trade Executed
-```
-[09:15] BTCUSDT_5 -> Executed long_double_touch @ 97500.00
-```
-
-### Stats Update (every 5 minutes)
-```
-========================================
-Trading Stats
-========================================
-Setups monitored: 20
-Active signals: 5
-Open trades: 2
-Total trades: 15
-Win rate: 40.0%
-Daily P&L: $125.50
-Total P&L: $450.00
-========================================
-```
-
----
-
-## Quick Reference Card
-
-```
-Connect:     ssh root@209.38.84.47
-Logs:        journalctl -u doubletouchbot -f
-Status:      systemctl status doubletouchbot
-Stop:        systemctl stop doubletouchbot
-Start:       systemctl start doubletouchbot
-Restart:     systemctl restart doubletouchbot
-Update:      cd /root/kingbot && git pull && systemctl restart doubletouchbot
-Edit config: nano /root/kingbot/.env
-Disconnect:  exit
-```
-
----
-
-## Telegram Notifications
-
-The bot sends alerts for:
-- Bot started/stopped
-- Limit order placed (waiting for fill)
-- Order filled (trade active)
-- Trade closed (TP/SL hit)
-- Order cancelled (expired)
-
-### Setup Telegram
-1. Message @BotFather on Telegram
-2. Create new bot, get token
-3. Message your bot, then visit:
-   `https://api.telegram.org/bot<TOKEN>/getUpdates`
-4. Find your chat_id in the response
-5. Add to .env file and restart bot
-
----
-
-## File Structure on VPS
+## File Structure
 
 ```
 /root/kingbot/
-├── bot.py                    # Main bot
-├── double_touch_strategy.py  # Strategy logic
-├── data_feed.py              # Price data + indicators
-├── order_manager.py          # Trade execution
+├── breakaway_bot.py          # Main bot (ACTIVE)
+├── breakaway_strategy.py     # Signal detection
+├── bybit_client.py           # API client + WebSocket
 ├── config.py                 # Settings
-├── bybit_client.py           # Bybit API
-├── notifier.py               # Telegram
-├── start.py                  # Entry point
+├── symbol_scanner.py         # Top coin fetcher
 ├── .env                      # API keys (secret!)
-└── CLAUDE.md                 # Documentation
+├── breakaway_bot.log         # Bot logs
+│
+├── bot.py                    # Double Touch bot (legacy)
+├── double_touch_strategy.py  # DT pattern detection
+└── CLAUDE.md                 # Full documentation
 ```
 
 ---
 
-## Systemd Service Location
+## Need Help?
 
-```
-/etc/systemd/system/doubletouchbot.service
-```
-
-To view the service file:
-```bash
-cat /etc/systemd/system/doubletouchbot.service
-```
-
-To reload after editing:
-```bash
-systemctl daemon-reload
-systemctl restart doubletouchbot
-```
+1. Stop bot: `pkill -f breakaway_bot`
+2. Check log: `cat breakaway_bot.log`
+3. Look for errors
+4. Ask Claude!
