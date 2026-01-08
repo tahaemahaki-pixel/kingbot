@@ -13,7 +13,7 @@ from bybit_client import BybitClient
 class SymbolScanner:
     """Scans Bybit for top trading symbols."""
 
-    # Symbols to exclude (stablecoins, wrapped tokens, etc.)
+    # Symbols to exclude (stablecoins, wrapped tokens, unavailable)
     EXCLUDED_SYMBOLS = [
         "USDCUSDT",
         "DAIUSDT",
@@ -23,7 +23,19 @@ class SymbolScanner:
         "WBTCUSDT",
         "STETHUSDT",
         "WETHUSDT",
+        # Not available on Bybit perpetuals
+        "SHIBUSDT",
+        "1000SHIBUSDT",
     ]
+
+    # Meme coins that use 1000XXXUSDT format on Bybit perpetuals
+    # Maps common name -> Bybit perpetual symbol
+    MEME_COIN_CONVERSIONS = {
+        "PEPEUSDT": "1000PEPEUSDT",
+        "FLOKIUSDT": "1000FLOKIUSDT",
+        "BONKUSDT": "1000BONKUSDT",
+        "LUNCUSDT": "1000LUNCUSDT",
+    }
 
     # Minimum 24h turnover in USD to be considered
     MIN_TURNOVER_USD = 10_000_000  # $10M minimum
@@ -33,6 +45,10 @@ class SymbolScanner:
         self._cache: Optional[List[str]] = None
         self._cache_time: float = 0
         self._cache_ttl: float = 3600  # Cache for 1 hour
+
+    def convert_to_bybit_symbol(self, symbol: str) -> str:
+        """Convert symbol to Bybit perpetual format (handles meme coins)."""
+        return self.MEME_COIN_CONVERSIONS.get(symbol, symbol)
 
     def get_top_coins(self, count: int = 50) -> List[str]:
         """
@@ -117,17 +133,17 @@ class SymbolScanner:
             return []
 
     def _get_fallback_list(self, count: int) -> List[str]:
-        """Return fallback list if API fails."""
+        """Return fallback list if API fails (uses correct Bybit symbols)."""
         fallback = [
             "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT",
             "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT", "SUIUSDT",
             "LTCUSDT", "BCHUSDT", "ATOMUSDT", "UNIUSDT", "APTUSDT",
             "ARBUSDT", "OPUSDT", "NEARUSDT", "FILUSDT", "INJUSDT",
-            "MATICUSDT", "SHIBUSDT", "AAVEUSDT", "MKRUSDT", "COMPUSDT",
-            "ETCUSDT", "ALGOUSDT", "XLMUSDT", "VETUSDT", "ICPUSDT",
-            "FTMUSDT", "SANDUSDT", "MANAUSDT", "AXSUSDT", "GALAUSDT",
-            "TRXUSDT", "APEUSDT", "LDOUSDT", "RNDRUSDT", "GMXUSDT",
-            "PEPEUSDT", "FLOKIUSDT", "BONKUSDT", "WIFUSDT", "JUPUSDT",
+            "MATICUSDT", "AAVEUSDT", "MKRUSDT", "COMPUSDT", "ETCUSDT",
+            "ALGOUSDT", "XLMUSDT", "VETUSDT", "ICPUSDT", "FTMUSDT",
+            "SANDUSDT", "MANAUSDT", "AXSUSDT", "GALAUSDT", "TRXUSDT",
+            "APEUSDT", "LDOUSDT", "RNDRUSDT", "GMXUSDT", "WIFUSDT",
+            "1000PEPEUSDT", "1000FLOKIUSDT", "1000BONKUSDT", "JUPUSDT",
             "PNUTUSDT", "ONDOUSDT", "ENAUSDT", "EIGENUSDT", "TRUMPUSDT",
         ]
         return fallback[:count]
@@ -136,25 +152,29 @@ class SymbolScanner:
         """
         Merge top coins with priority list.
         Priority coins always included even if not in top N.
+        Converts meme coin symbols to Bybit format.
+        Excludes unavailable symbols.
 
         Args:
             top_coins: List of top coins by volume
             priority_coins: List of priority symbols to always include
 
         Returns:
-            Merged list with priority coins first
+            Merged list with priority coins first (all in Bybit format)
         """
         result = []
 
-        # Add priority coins first
+        # Add priority coins first (convert to Bybit format)
         for symbol in priority_coins:
-            if symbol not in result:
-                result.append(symbol)
+            bybit_symbol = self.convert_to_bybit_symbol(symbol)
+            if bybit_symbol not in result and bybit_symbol not in self.EXCLUDED_SYMBOLS:
+                result.append(bybit_symbol)
 
-        # Add top coins (excluding duplicates)
+        # Add top coins (excluding duplicates and unavailable, convert to Bybit format)
         for symbol in top_coins:
-            if symbol not in result:
-                result.append(symbol)
+            bybit_symbol = self.convert_to_bybit_symbol(symbol)
+            if bybit_symbol not in result and bybit_symbol not in self.EXCLUDED_SYMBOLS:
+                result.append(bybit_symbol)
 
         return result
 

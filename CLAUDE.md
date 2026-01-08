@@ -415,22 +415,46 @@ pkill -f TradingBot
 
 ---
 
-## Breakaway Strategy Bot (ACTIVE) - Multi-Timeframe
+## Breakaway Strategy Bot (ACTIVE) - 5-Minute Scanner
 
-The Breakaway bot trades counter-trend FVG setups on **BOTH 5-minute and 1-minute timeframes** simultaneously using volume spikes and Tai Index confirmation.
+The Breakaway bot trades counter-trend FVG setups on the **5-minute timeframe** using volume spikes and **Volume Delta Imbalance** confirmation.
 
-### Multi-Timeframe Overview
+### Configuration (Updated 2026-01-08)
 
-| Parameter | 5-Minute | 1-Minute |
-|-----------|----------|----------|
-| **Symbols** | Top 50 by volume | Top 20 by volume |
-| **Risk per trade** | 2% | 1% |
-| **Max positions** | 5 | 5 |
-| **Volume filter** | 2.5x | 3.0x (stricter) |
-| **Cooldown** | None | 15 minutes between trades |
-| **Candles preload** | 2000 | 2000 |
+| Parameter | Value |
+|-----------|-------|
+| **Symbols** | 45 pairs |
+| **Risk per trade** | 1% |
+| **Max positions** | 5 |
+| **Volume filter** | ≥2.0x average |
+| **Candles preload** | 2000 |
+| **Scan frequency** | Every 5-min candle close |
 
-**Total max exposure:** 10 positions (5 per timeframe)
+**Note:** 1-minute trading was disabled based on backtest results showing 5-min significantly outperforms (1.13R vs 0.33R expectancy).
+
+### Pairs Being Scanned (45 Total)
+
+**Priority Symbols:** `SOLUSDT, BTCUSDT, PNUTUSDT, DOGEUSDT`
+
+| # | Symbol | # | Symbol | # | Symbol |
+|---|--------|---|--------|---|--------|
+| 1 | SOLUSDT | 16 | APTUSDT | 31 | FTMUSDT |
+| 2 | BTCUSDT | 17 | ARBUSDT | 32 | SANDUSDT |
+| 3 | PNUTUSDT | 18 | OPUSDT | 33 | MANAUSDT |
+| 4 | DOGEUSDT | 19 | NEARUSDT | 34 | AXSUSDT |
+| 5 | ETHUSDT | 20 | FILUSDT | 35 | GALAUSDT |
+| 6 | XRPUSDT | 21 | INJUSDT | 36 | TRXUSDT |
+| 7 | ADAUSDT | 22 | MATICUSDT | 37 | APEUSDT |
+| 8 | AVAXUSDT | 23 | AAVEUSDT | 38 | LDOUSDT |
+| 9 | LINKUSDT | 24 | MKRUSDT | 39 | RNDRUSDT |
+| 10 | DOTUSDT | 25 | COMPUSDT | 40 | GMXUSDT |
+| 11 | SUIUSDT | 26 | ETCUSDT | 41 | WIFUSDT |
+| 12 | LTCUSDT | 27 | ALGOUSDT | 42 | 1000PEPEUSDT |
+| 13 | BCHUSDT | 28 | XLMUSDT | 43 | 1000FLOKIUSDT |
+| 14 | ATOMUSDT | 29 | VETUSDT | 44 | 1000BONKUSDT |
+| 15 | UNIUSDT | 30 | ICPUSDT | 45 | JUPUSDT |
+
+**Note:** Meme coins use `1000XXXUSDT` format on Bybit perpetuals (PEPE, FLOKI, BONK)
 
 ### Strategy Overview
 
@@ -440,31 +464,39 @@ The Breakaway bot trades counter-trend FVG setups on **BOTH 5-minute and 1-minut
 |-----------|-------|------|
 | FVG | Bearish (gap down) | Bullish (gap up) |
 | EWVMA Cradle | 3+ of 5 candles within EWVMA(20) bands | Same |
-| Volume Spike | >= 2.5x (5m) or 3.0x (1m) | Same |
-| Tai Index | > 55 (overbought) | < 45 (oversold) |
-| Trend Filter | Price > EWVMA-200 | Price < EWVMA-200 |
+| Volume Spike | ≥ 2.0x 20-period average | Same |
+| **Imbalance** | ≤ -0.10 (selling pressure) | ≥ +0.10 (buying pressure) |
+
+**Note:** Tai Index and EWVMA-200 trend filters were replaced by Volume Delta Imbalance on 2026-01-08 based on backtest results showing +26% improvement in expectancy.
 
 **Exit Rules:**
 - Stop Loss: FVG boundary + 0.1% buffer
 - Take Profit: 3:1 R:R ratio
 
-### Backtest Results
+### Backtest Results (5-Minute) - Imbalance Filter
 
-**5-Minute Timeframe:**
-| Direction | Win Rate | Expectancy |
-|-----------|----------|------------|
-| Shorts | 76-93% | +2.0R |
-| Longs | 53-55% | +1.1R |
+**Live Bybit Data (17 days, 5000 candles per symbol):**
 
-SOL 5min shorts: 92.9% WR, +2.71R expectancy
+| Symbol | Trades | Win Rate | Total R | Expectancy |
+|--------|--------|----------|---------|------------|
+| BTCUSDT | 45 | 53.3% | +51R | +1.13R |
+| ETHUSDT | 55 | 47.3% | +49R | +0.89R |
+| SOLUSDT | 47 | 44.7% | +37R | +0.79R |
+| **TOTAL** | **147** | **48.3%** | **+137R** | **+0.93R** |
 
-**1-Minute Timeframe (3x volume filter):**
-| Metric | Value |
-|--------|-------|
-| Total Trades | 185 |
-| Win Rate | 48.6% |
-| Expectancy | +0.95R |
-| Total R | +175R |
+- Avg trades/day: ~2.9 per symbol (~8.6 total)
+- Avg hold time: 60-80 minutes
+- Long/Short split: ~50/50
+
+**Historical comparison (Tai+Trend vs Imbalance filter):**
+
+| Metric | Before (Tai+Trend) | After (Imbalance) | Change |
+|--------|-------------------|-------------------|--------|
+| Trades | 314 | ~3,139 | +10x |
+| Win Rate | 52.2% | ~59.3% | +7% |
+| Expectancy | +1.08R | ~1.36R | +26% |
+
+See `volume charts/BACKTEST_RESULTS.md` for full analysis.
 
 ### Start Breakaway Bot
 
@@ -472,11 +504,14 @@ SOL 5min shorts: 92.9% WR, +2.71R expectancy
 ssh root@209.38.84.47
 cd /root/kingbot
 
-# Stop any existing bot
-pkill -f breakaway_bot
-pkill -f TradingBot
+# Bot runs as systemd service
+systemctl restart kingbot
+systemctl status kingbot
+```
 
-# Start Breakaway bot (multi-timeframe)
+Or manually:
+```bash
+pkill -f breakaway_bot
 nohup python3 -u breakaway_bot.py > breakaway_bot.log 2>&1 &
 ```
 
@@ -493,23 +528,17 @@ nohup python3 -u breakaway_bot.py > breakaway_bot.log 2>&1 &
 
 ```
 ============================================================
-BREAKAWAY BOT STATUS - 12:55:18
+BREAKAWAY BOT STATUS - 13:27:45
 ============================================================
 
 5-MIN TIMEFRAME:
-  Symbols: 46
+  Symbols: 42
   Positions: 0/5
   Signals: 0 | Executed: 0
-
-1-MIN TIMEFRAME:
-  Symbols: 21
-  Positions: 0/5
-  Signals: 0 | Executed: 0
-  Cooldown: Ready
 
 ACCOUNT:
-  Balance: $215.41
-  Equity: $215.41
+  Balance: $215.46
+  Equity: $215.46
   Total Open: 0
 ============================================================
 ```
@@ -525,100 +554,56 @@ When a signal triggers:
   Target: 183.887850
   R:R: 3.0
   Volume: 3.2x
-  Tai Index: 67
-============================================================
-
-============================================================
-[1-MIN] NEW BREAKAWAY SIGNAL - BTCUSDT
-============================================================
-  Direction: LONG
-  Entry: 42150.00
-  Stop Loss: 42050.00
-  Target: 42450.00
-  R:R: 3.0
-  Volume: 3.5x (3x filter)
-  Tai Index: 38
+  Imbalance: -0.25
 ============================================================
 ```
 
 ### Breakaway Parameters
 
-**Shared Parameters:**
 | Parameter | Value | Description |
 |-----------|-------|-------------|
 | Priority Symbols | SOL, BTC, PNUT, DOGE | Always included |
+| Max Symbols | 45 | Top coins by 24h volume |
+| Risk per Trade | 1% | Per trade risk |
+| Max Positions | 5 | Concurrent positions |
+| Volume Threshold | 2.0x | Min volume spike |
 | EWVMA Length | 20 | Cradle detection |
-| EWVMA Trend | 200 | Counter-trend filter |
-| Tai Short | > 53 | Overbought for shorts |
-| Tai Long | < 47 | Oversold for longs |
+| **Imbalance Threshold** | ±0.10 | Volume delta imbalance |
+| **Imbalance Lookback** | 10 | Candles for imbalance calc |
 | Risk:Reward | 3:1 | Target ratio |
-| Historical Candles | 2000 | Loaded on startup |
+| Candles Preload | 2000 | Historical data loaded |
 
-**5-Minute Specific:**
-| Parameter | Value |
-|-----------|-------|
-| Symbols | Top 50 |
-| Risk per Trade | 2% |
-| Max Positions | 5 |
-| Volume Threshold | 2.0x |
-
-**1-Minute Specific:**
-| Parameter | Value |
-|-----------|-------|
-| Symbols | Top 20 |
-| Risk per Trade | 1% |
-| Max Positions | 5 |
-| Volume Threshold | 2.0x |
-| Cooldown | 15 minutes |
+**Disabled Filters (2026-01-08):** Tai Index and EWVMA-200 trend filters are now OFF by default.
 
 ### Breakaway Files
 
 | File | Description |
 |------|-------------|
-| `breakaway_bot.py` | Main bot orchestrator (multi-timeframe) |
+| `breakaway_bot.py` | Main bot orchestrator (5-min only) |
 | `breakaway_strategy.py` | Signal detection & indicators |
 | `symbol_scanner.py` | Top coin fetcher by volume |
-| `backtest_1min_breakaway.py` | 1-minute backtest script |
 
 ### Environment Variables
 
 Add to `.env` for custom configuration:
 ```
-# Shared settings
 BREAKAWAY_PRIORITY_SYMBOLS=SOLUSDT,BTCUSDT,PNUTUSDT,DOGEUSDT
 BREAKAWAY_DIRECTION=both
-BREAKAWAY_TAI_SHORT=53.0
-BREAKAWAY_TAI_LONG=47.0
 BREAKAWAY_RISK_REWARD=3.0
 BREAKAWAY_CANDLES_PRELOAD=2000
-
-# 5-minute settings
-BREAKAWAY_MAX_SYMBOLS=50
+BREAKAWAY_MAX_SYMBOLS=45
 BREAKAWAY_MAX_POSITIONS=5
-BREAKAWAY_RISK_PER_TRADE=0.02
+BREAKAWAY_RISK_PER_TRADE=0.01
 BREAKAWAY_MIN_VOL_RATIO=2.0
 
-# 1-minute settings
-BREAKAWAY_ENABLE_1M=true
-BREAKAWAY_SYMBOLS_1M=20
-BREAKAWAY_MAX_POSITIONS_1M=5
-BREAKAWAY_RISK_1M=0.01
-BREAKAWAY_VOL_RATIO_1M=2.0
-BREAKAWAY_COOLDOWN_1M=15
-```
+# Imbalance filter (NEW - 2026-01-08)
+BREAKAWAY_USE_IMBALANCE=true
+BREAKAWAY_IMBALANCE_THRESHOLD=0.10
+BREAKAWAY_IMBALANCE_LOOKBACK=10
 
-### 1-Minute Cooldown Logic
-
-The 15-minute cooldown prevents overtrading on the faster timeframe:
-- After a 1-min trade executes, no new 1-min trades for 15 minutes
-- 5-min trades are unaffected by the cooldown
-- Cooldown status shown in bot status display
-
-```
-1-MIN TIMEFRAME:
-  Cooldown: 12.5min remaining    # After recent trade
-  Cooldown: Ready                # Can take new trades
-  Cooldown: Ready (last: 18min ago)  # Shows time since last trade
+# Legacy filters (disabled by default)
+BREAKAWAY_USE_TAI=false
+BREAKAWAY_USE_TREND=false
 ```
 
 ---
@@ -675,6 +660,54 @@ data/trading_performance.db
 ---
 
 ## Changelog / Fixes
+
+### 2026-01-08: Aggressive Breakaway Strategy - Imbalance Filter
+
+**Problem:** Tai Index and EWVMA-200 trend filters were too restrictive, limiting trade opportunities.
+
+**Analysis:** Tested 15 different filter configurations via `filter_variations_backtest.py`. Key findings:
+- Tai Index + Trend filters: 314 trades, 52.2% WR, +1.08R expectancy
+- Imbalance filter only: 3,139 trades, 59.3% WR, +1.36R expectancy
+
+**Solution:** Replaced Tai Index and EWVMA-200 trend filters with **Volume Delta Imbalance** filter.
+
+**Volume Delta Imbalance Calculation:**
+```python
+# For each candle: bullish (close > open) = buy, bearish = sell
+buy_volume = volume if bullish else 0
+sell_volume = volume if bearish else 0
+imbalance = (buy_sum - sell_sum) / total_sum  # Over 10-candle lookback
+# Returns -1.0 (all sells) to +1.0 (all buys)
+```
+
+**Filter Logic:**
+| Direction | Old Filters | New Filter |
+|-----------|-------------|------------|
+| SHORT | Tai > 53 AND Price > EWVMA-200 | Imbalance ≤ -0.10 |
+| LONG | Tai < 47 AND Price < EWVMA-200 | Imbalance ≥ +0.10 |
+
+**Performance Improvement:**
+
+| Metric | Before | After | Change |
+|--------|--------|-------|--------|
+| Trades | 314 | ~3,139 | +10x |
+| Win Rate | 52.2% | ~59.3% | +7% |
+| Expectancy | +1.08R | ~1.36R | +26% |
+| Total R | +340R | ~4,269R | +12.5x |
+
+**Files Modified:**
+- `breakaway_strategy.py`: Added `calculate_volume_delta_imbalance()`, updated filter logic
+- `config.py`: Added `use_imbalance_filter`, `imbalance_threshold`, `imbalance_lookback` params
+- `breakaway_bot.py`: Pass imbalance parameters to strategy, updated signal output
+
+**Rollback (if needed):**
+```bash
+BREAKAWAY_USE_IMBALANCE=false
+BREAKAWAY_USE_TAI=true
+BREAKAWAY_USE_TREND=true
+```
+
+---
 
 ### 2026-01-05: API Authentication & Reliability Fixes
 
@@ -812,6 +845,64 @@ def _ping_loop(self):
 
 **Files Modified:**
 - `bybit_client.py`: Added ping/pong keepalive mechanism
+
+### 2026-01-08: WebSocket Field Name Mismatch Fix
+
+**Problem:** Bot's `_on_kline` handler was reading wrong field name for timeframe.
+
+**Root Cause:** Field name mismatch between WebSocket client and bot handler:
+```python
+# bybit_client.py sends:
+"timeframe": timeframe
+
+# breakaway_bot.py was reading:
+interval = data.get("interval", "5")  # Wrong key!
+```
+
+**Impact Assessment:**
+- **Signal detection was NOT affected** in current configuration
+- The default value `"5"` happened to match the only timeframe being used
+- Bug would have caused issues if multiple timeframes (1m + 5m) were added later
+- All candles would have been treated as "5" regardless of actual timeframe
+
+**Why it worked despite the bug:**
+```python
+interval = data.get("interval", "5")  # Returns "5" (default, key missing)
+if interval == "5":  # True, so code proceeded correctly
+```
+
+**Fix Applied:**
+```python
+# Before (wrong):
+interval = data.get("interval", "5")
+
+# After (correct):
+timeframe = data.get("timeframe", "5")
+```
+
+**Additional Change:**
+Added debug logging to confirm candle close detection:
+```python
+def _on_new_candle_5m(self, symbol: str, setup_key: str):
+    now = datetime.now().strftime("%H:%M:%S")
+    print(f"[{now}] 5m candle close: {symbol}")
+```
+
+**Verification:**
+```
+[03:40:00] 5m candle close: SOLUSDT
+[03:40:00] 5m candle close: BTCUSDT
+[03:40:04] 5m candle close: ETHUSDT
+... (all 45 symbols at :00, :05, :10, etc.)
+```
+
+**Lesson Learned:**
+- Always verify field names match between producer (WebSocket) and consumer (handler)
+- Add debug logging for critical event detection (candle closes)
+- Test with logging before assuming timing is correct
+
+**Files Modified:**
+- `breakaway_bot.py`: Fixed field name `interval` → `timeframe`, added candle close logging
 
 ---
 

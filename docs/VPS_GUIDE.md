@@ -2,11 +2,13 @@
 
 Quick reference for managing trading bots on VPS.
 
+**Updated:** 2026-01-07 - Bot now runs 5-minute only (1-min disabled)
+
 ---
 
 ## Quick Reference Card
 
-### Breakaway Bot (ACTIVE)
+### Breakaway Bot (ACTIVE) - 5-Min Scanner
 
 | Action | Command |
 |--------|---------|
@@ -174,23 +176,17 @@ print(f'---\\nTotal: \${total:.2f}')
 ### Normal Status Update (every 5 min)
 ```
 ============================================================
-BREAKAWAY BOT STATUS - 12:55:18
+BREAKAWAY BOT STATUS - 13:27:45
 ============================================================
 
 5-MIN TIMEFRAME:
-  Symbols: 22
+  Symbols: 42
   Positions: 0/5
   Signals: 0 | Executed: 0
-
-1-MIN TIMEFRAME:
-  Symbols: 22
-  Positions: 0/5
-  Signals: 0 | Executed: 0
-  Cooldown: Ready
 
 ACCOUNT:
-  Balance: $215.54
-  Equity: $215.54
+  Balance: $215.46
+  Equity: $215.46
   Total Open: 0
 ============================================================
 ```
@@ -212,18 +208,49 @@ ACCOUNT:
 
 ---
 
-## Breakaway Strategy Settings
+## Breakaway Strategy Settings (5-Min Only)
 
-| Parameter | 5-Minute | 1-Minute |
-|-----------|----------|----------|
-| Symbols | 22 | 22 |
-| Risk per trade | 2% | 1% |
-| Max positions | 5 | 5 |
-| Volume filter | ≥2.0x | ≥2.0x |
-| Tai short | >53 | >53 |
-| Tai long | <47 | <47 |
-| Cooldown | None | 15 min |
-| R:R Target | 3:1 | 3:1 |
+| Parameter | Value |
+|-----------|-------|
+| Symbols | 45 pairs |
+| Risk per trade | 2% |
+| Max positions | 5 |
+| Volume filter | ≥1.5x |
+| Tai short | >53 |
+| Tai long | <47 |
+| R:R Target | 3:1 |
+| Candles preload | 2000 |
+| Scan frequency | Every 5-min candle close |
+
+**Note:** 1-minute trading disabled 2026-01-07 (5-min outperforms: 1.13R vs 0.33R expectancy)
+
+### Pairs Being Scanned (45 Total)
+
+**Priority Symbols (always included):**
+```
+SOLUSDT, BTCUSDT, PNUTUSDT, DOGEUSDT
+```
+
+**Full List:**
+```
+ 1. SOLUSDT        16. APTUSDT        31. FTMUSDT
+ 2. BTCUSDT        17. ARBUSDT        32. SANDUSDT
+ 3. PNUTUSDT       18. OPUSDT         33. MANAUSDT
+ 4. DOGEUSDT       19. NEARUSDT       34. AXSUSDT
+ 5. ETHUSDT        20. FILUSDT        35. GALAUSDT
+ 6. XRPUSDT        21. INJUSDT        36. TRXUSDT
+ 7. ADAUSDT        22. MATICUSDT      37. APEUSDT
+ 8. AVAXUSDT       23. AAVEUSDT       38. LDOUSDT
+ 9. LINKUSDT       24. MKRUSDT        39. RNDRUSDT
+10. DOTUSDT        25. COMPUSDT       40. GMXUSDT
+11. SUIUSDT        26. ETCUSDT        41. WIFUSDT
+12. LTCUSDT        27. ALGOUSDT       42. 1000PEPEUSDT
+13. BCHUSDT        28. XLMUSDT        43. 1000FLOKIUSDT
+14. ATOMUSDT       29. VETUSDT        44. 1000BONKUSDT
+15. UNIUSDT        30. ICPUSDT        45. JUPUSDT
+```
+
+**Note:** Meme coins use `1000XXXUSDT` format on Bybit perpetuals
 
 ### Signal Conditions (ALL must align)
 

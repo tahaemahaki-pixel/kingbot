@@ -143,6 +143,76 @@ class BybitClient:
         params = {"category": self.config.category, "symbol": symbol, "limit": limit}
         return self._request("GET", "/v5/market/orderbook", params)
 
+    def get_orderbook_imbalance(self, symbol: str, depth: int = 50) -> Optional[float]:
+        """
+        Calculate order book imbalance from bid/ask depth.
+        Returns: -1.0 (all asks) to +1.0 (all bids), None on error.
+        Positive = more bids (buying pressure), Negative = more asks (selling pressure)
+        """
+        try:
+            data = self.get_orderbook(symbol, depth)
+            bids = data.get("b", [])
+            asks = data.get("a", [])
+
+            bid_volume = sum(float(b[1]) for b in bids)
+            ask_volume = sum(float(a[1]) for a in asks)
+            total = bid_volume + ask_volume
+
+            if total > 0:
+                return (bid_volume - ask_volume) / total
+            return 0.0
+        except Exception as e:
+            print(f"Error getting orderbook imbalance for {symbol}: {e}")
+            return None
+
+    def get_funding_rate(self, symbol: str) -> Optional[float]:
+        """
+        Get current funding rate for a symbol.
+        Positive = longs pay shorts, Negative = shorts pay longs.
+        """
+        try:
+            params = {"category": self.config.category, "symbol": symbol, "limit": 1}
+            data = self._request("GET", "/v5/market/funding/history", params)
+            rates = data.get("list", [])
+            if rates:
+                return float(rates[0].get("fundingRate", 0))
+            return None
+        except Exception as e:
+            print(f"Error getting funding rate for {symbol}: {e}")
+            return None
+
+    def get_open_interest(self, symbol: str) -> Optional[float]:
+        """Get current open interest for a symbol."""
+        try:
+            params = {"category": self.config.category, "symbol": symbol, "intervalTime": "5min", "limit": 1}
+            data = self._request("GET", "/v5/market/open-interest", params)
+            oi_list = data.get("list", [])
+            if oi_list:
+                return float(oi_list[0].get("openInterest", 0))
+            return None
+        except Exception as e:
+            print(f"Error getting open interest for {symbol}: {e}")
+            return None
+
+    def get_long_short_ratio(self, symbol: str) -> Optional[Dict]:
+        """
+        Get long/short ratio (account-based).
+        Returns: {'buyRatio': 0.65, 'sellRatio': 0.35} or None
+        """
+        try:
+            params = {"category": self.config.category, "symbol": symbol, "period": "5min", "limit": 1}
+            data = self._request("GET", "/v5/market/account-ratio", params)
+            ratios = data.get("list", [])
+            if ratios:
+                return {
+                    'buyRatio': float(ratios[0].get("buyRatio", 0.5)),
+                    'sellRatio': float(ratios[0].get("sellRatio", 0.5))
+                }
+            return None
+        except Exception as e:
+            print(f"Error getting long/short ratio for {symbol}: {e}")
+            return None
+
     # ===== Account =====
 
     def get_wallet_balance(self) -> Dict:
@@ -443,6 +513,9 @@ class BybitWebSocket:
         # Wait for ping thread to finish
         if self.ping_thread and self.ping_thread.is_alive():
             self.ping_thread.join(timeout=2)
+
+    # Alias for compatibility
+    close = disconnect
 
 
 if __name__ == "__main__":

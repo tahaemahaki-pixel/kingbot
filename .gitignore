@@ -16,3 +16,10 @@ nohup.out
 # IDE
 .vscode/
 .idea/
+
+# Local data
+data/
+.claude/
+
+# Zone identifiers (Windows)
+*.csv:Zone.Identifier
