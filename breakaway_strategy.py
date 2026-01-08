@@ -1,29 +1,26 @@
 """
-Breakaway Strategy - Counter-trend FVG Trading
+Breakaway Strategy - FVG Trading with Volume Delta Imbalance Filter
 
 Entry conditions for SHORTS (ALL required):
 1. Bearish FVG forms (current_high < 2_candles_ago_low)
 2. Price cradled 3+ of last 5 candles within EWVMA(20) bands
-3. Volume spike >= 2.0x (20-period average) [updated 2026-01-06]
-4. Tai Index > 53 (overbought) [updated 2026-01-06]
-5. Price > EWVMA-200 (counter-trend)
+3. Volume spike >= 2.0x (20-period average)
+4. Volume Delta Imbalance < -0.10 (selling pressure)
 
 Entry conditions for LONGS (ALL required):
 1. Bullish FVG forms (current_low > 2_candles_ago_high)
 2. Price cradled 3+ of last 5 candles within EWVMA(20) bands
-3. Volume spike >= 2.0x (20-period average) [updated 2026-01-06]
-4. Tai Index < 47 (oversold) [updated 2026-01-06]
-5. Price < EWVMA-200 (counter-trend)
+3. Volume spike >= 2.0x (20-period average)
+4. Volume Delta Imbalance > +0.10 (buying pressure)
 
 Exit:
 - SL: FVG boundary + 0.1% buffer
 - TP: 3:1 R:R
 
-Threshold Update (2026-01-06):
-- Volume: 3.0x -> 2.0x (increases signal frequency ~2x)
-- Tai Short: 55 -> 53
-- Tai Long: 45 -> 47
-- Backtest showed: 349 trades, 46.1% WR, 0.85R expectancy, 295R total
+Aggressive Mode Update (2026-01-08):
+- Replaced Tai Index and EWVMA-200 trend filters with Volume Delta Imbalance
+- Backtest showed: 3139 trades, 59.3% WR, 1.36R expectancy, 4269R total
+- +26% improvement in expectancy vs old filters
 """
 
 from enum import Enum
@@ -65,6 +62,7 @@ class BreakawaySignal:
     vol_ratio: float     # Volume spike ratio
     tai_index: float     # Tai value at signal
     cradle_count: int    # Candles cradled
+    imbalance: float     # Volume delta imbalance at signal
 
     # Timing
     created_idx: int     # Candle index when created
@@ -204,8 +202,36 @@ class BreakawayIndicators:
 
         return vol_ratio
 
-    def calculate_all(self, closes: np.ndarray, highs: np.ndarray,
-                      lows: np.ndarray, volumes: np.ndarray) -> Dict[str, np.ndarray]:
+    def calculate_volume_delta_imbalance(self, opens: np.ndarray, closes: np.ndarray,
+                                          volumes: np.ndarray, lookback: int = 10) -> np.ndarray:
+        """
+        Calculate order book imbalance proxy using volume delta.
+        - Bullish candle (close > open): volume = buy pressure
+        - Bearish candle (close < open): volume = sell pressure
+        Returns: -1.0 (all sells) to +1.0 (all buys)
+        """
+        n = len(closes)
+        imbalance = np.zeros(n)
+
+        is_bullish = closes > opens
+        buy_volume = np.where(is_bullish, volumes, 0)
+        sell_volume = np.where(~is_bullish, volumes, 0)
+
+        buy_cumsum = np.cumsum(buy_volume)
+        sell_cumsum = np.cumsum(sell_volume)
+
+        for i in range(lookback, n):
+            buy_sum = buy_cumsum[i] - buy_cumsum[i - lookback]
+            sell_sum = sell_cumsum[i] - sell_cumsum[i - lookback]
+            total = buy_sum + sell_sum
+            if total > 0:
+                imbalance[i] = (buy_sum - sell_sum) / total
+
+        return imbalance
+
+    def calculate_all(self, opens: np.ndarray, closes: np.ndarray, highs: np.ndarray,
+                      lows: np.ndarray, volumes: np.ndarray,
+                      imbalance_lookback: int = 10) -> Dict[str, np.ndarray]:
         """Calculate all indicators."""
         # EWVMA-20 (cradle bands)
         ewvma_20 = self.calculate_ewvma(closes, volumes, self.ewvma_length)
@@ -220,6 +246,9 @@ class BreakawayIndicators:
         # Volume ratio
         vol_ratio = self.calculate_volume_ratio(volumes, self.vol_lookback)
 
+        # Volume delta imbalance
+        imbalance = self.calculate_volume_delta_imbalance(opens, closes, volumes, imbalance_lookback)
+
         # Cradle detection (close within bands)
         upper_band = ewvma_20 + ewvma_20_std
         lower_band = ewvma_20 - ewvma_20_std
@@ -233,25 +262,34 @@ class BreakawayIndicators:
             'ewvma_200': ewvma_200,
             'tai_index': tai_index,
             'vol_ratio': vol_ratio,
+            'imbalance': imbalance,
             'in_cradle': in_cradle,
         }
 
 
 class BreakawayStrategy:
     """
-    Breakaway Strategy - Counter-trend FVG trading.
+    Breakaway Strategy - FVG trading with Volume Delta Imbalance filter.
 
     Scans for bearish/bullish FVGs from EWVMA cradle consolidation
-    with volume confirmation and Tai Index filter.
+    with volume confirmation and imbalance filter.
     """
 
     def __init__(
         self,
         symbol: str,
         timeframe: str = "5",
-        min_vol_ratio: float = 2.5,
-        tai_threshold_short: float = 55.0,
-        tai_threshold_long: float = 45.0,
+        min_vol_ratio: float = 2.0,
+        # NEW: Imbalance filter (replaces Tai/Trend)
+        use_imbalance_filter: bool = True,
+        imbalance_threshold: float = 0.10,
+        imbalance_lookback: int = 10,
+        # OLD: Tai/Trend filters (optional, default OFF)
+        use_tai_filter: bool = False,
+        tai_threshold_short: float = 53.0,
+        tai_threshold_long: float = 47.0,
+        use_trend_filter: bool = False,
+        # Unchanged
         min_cradle_candles: int = 3,
         cradle_lookback: int = 5,
         risk_reward: float = 3.0,
@@ -264,8 +302,19 @@ class BreakawayStrategy:
 
         # Strategy parameters
         self.min_vol_ratio = min_vol_ratio
+
+        # NEW: Imbalance filter
+        self.use_imbalance_filter = use_imbalance_filter
+        self.imbalance_threshold = imbalance_threshold
+        self.imbalance_lookback = imbalance_lookback
+
+        # OLD: Tai/Trend filters (optional)
+        self.use_tai_filter = use_tai_filter
         self.tai_threshold_short = tai_threshold_short
         self.tai_threshold_long = tai_threshold_long
+        self.use_trend_filter = use_trend_filter
+
+        # Unchanged
         self.min_cradle_candles = min_cradle_candles
         self.cradle_lookback = cradle_lookback
         self.risk_reward = risk_reward
@@ -282,10 +331,12 @@ class BreakawayStrategy:
         # Cached indicator values (updated on each scan)
         self._ind_cache: Optional[Dict[str, np.ndarray]] = None
 
-    def calculate_indicators(self, closes: np.ndarray, highs: np.ndarray,
+    def calculate_indicators(self, opens: np.ndarray, closes: np.ndarray, highs: np.ndarray,
                             lows: np.ndarray, volumes: np.ndarray):
         """Calculate and cache all indicators."""
-        self._ind_cache = self.indicators.calculate_all(closes, highs, lows, volumes)
+        self._ind_cache = self.indicators.calculate_all(
+            opens, closes, highs, lows, volumes, self.imbalance_lookback
+        )
 
     def _detect_bearish_fvg(self, highs: np.ndarray, lows: np.ndarray, idx: int) -> Optional[dict]:
         """
@@ -338,20 +389,28 @@ class BreakawayStrategy:
         vol_ratio = self._ind_cache['vol_ratio'][idx]
         tai_index = self._ind_cache['tai_index'][idx]
         ewvma_200 = self._ind_cache['ewvma_200'][idx]
+        imbalance = self._ind_cache['imbalance'][idx]
 
-        # Volume spike
+        # Volume spike (always required)
         if vol_ratio < self.min_vol_ratio:
             return False, {}
 
-        # Tai Index overbought
-        if tai_index <= self.tai_threshold_short:
-            return False, {}
+        # NEW: Imbalance filter - require selling pressure
+        if self.use_imbalance_filter:
+            if imbalance > -self.imbalance_threshold:
+                return False, {}
 
-        # Counter-trend (price above EWVMA-200)
-        if closes[idx] <= ewvma_200:
-            return False, {}
+        # OLD: Tai Index overbought (optional, default OFF)
+        if self.use_tai_filter:
+            if tai_index <= self.tai_threshold_short:
+                return False, {}
 
-        # Cradle check
+        # OLD: Counter-trend (optional, default OFF)
+        if self.use_trend_filter:
+            if closes[idx] <= ewvma_200:
+                return False, {}
+
+        # Cradle check (always required)
         was_cradled, cradle_count = self._check_cradle(idx)
         if not was_cradled:
             return False, {}
@@ -362,6 +421,7 @@ class BreakawayStrategy:
             'ewvma_200': ewvma_200,
             'cradle_count': cradle_count,
             'ewvma_dist': (closes[idx] - ewvma_200) / ewvma_200 * 100,
+            'imbalance': imbalance,
         }
 
     def _check_long_filters(self, closes: np.ndarray, idx: int) -> Tuple[bool, dict]:
@@ -372,20 +432,28 @@ class BreakawayStrategy:
         vol_ratio = self._ind_cache['vol_ratio'][idx]
         tai_index = self._ind_cache['tai_index'][idx]
         ewvma_200 = self._ind_cache['ewvma_200'][idx]
+        imbalance = self._ind_cache['imbalance'][idx]
 
-        # Volume spike
+        # Volume spike (always required)
         if vol_ratio < self.min_vol_ratio:
             return False, {}
 
-        # Tai Index oversold
-        if tai_index >= self.tai_threshold_long:
-            return False, {}
+        # NEW: Imbalance filter - require buying pressure
+        if self.use_imbalance_filter:
+            if imbalance < self.imbalance_threshold:
+                return False, {}
 
-        # Counter-trend (price below EWVMA-200)
-        if closes[idx] >= ewvma_200:
-            return False, {}
+        # OLD: Tai Index oversold (optional, default OFF)
+        if self.use_tai_filter:
+            if tai_index >= self.tai_threshold_long:
+                return False, {}
 
-        # Cradle check
+        # OLD: Counter-trend (optional, default OFF)
+        if self.use_trend_filter:
+            if closes[idx] >= ewvma_200:
+                return False, {}
+
+        # Cradle check (always required)
         was_cradled, cradle_count = self._check_cradle(idx)
         if not was_cradled:
             return False, {}
@@ -396,9 +464,10 @@ class BreakawayStrategy:
             'ewvma_200': ewvma_200,
             'cradle_count': cradle_count,
             'ewvma_dist': (closes[idx] - ewvma_200) / ewvma_200 * 100,
+            'imbalance': imbalance,
         }
 
-    def scan_for_signals(self, closes: np.ndarray, highs: np.ndarray,
+    def scan_for_signals(self, opens: np.ndarray, closes: np.ndarray, highs: np.ndarray,
                         lows: np.ndarray, volumes: np.ndarray,
                         times: np.ndarray) -> Optional[BreakawaySignal]:
         """
@@ -417,7 +486,7 @@ class BreakawayStrategy:
 
         # Calculate indicators if needed
         if self._ind_cache is None or len(self._ind_cache['ewvma_20']) != n:
-            self.calculate_indicators(closes, highs, lows, volumes)
+            self.calculate_indicators(opens, closes, highs, lows, volumes)
 
         signal = None
 
@@ -446,6 +515,7 @@ class BreakawayStrategy:
                         vol_ratio=context['vol_ratio'],
                         tai_index=context['tai_index'],
                         cradle_count=context['cradle_count'],
+                        imbalance=context['imbalance'],
                         created_idx=idx,
                         created_time=int(times[idx]),
                     )
@@ -475,6 +545,7 @@ class BreakawayStrategy:
                         vol_ratio=context['vol_ratio'],
                         tai_index=context['tai_index'],
                         cradle_count=context['cradle_count'],
+                        imbalance=context['imbalance'],
                         created_idx=idx,
                         created_time=int(times[idx]),
                     )
@@ -498,7 +569,7 @@ class BreakawayStrategy:
         return (
             f"[{s.setup_key}] {s.direction.upper()}: "
             f"Entry={s.entry_price:.4f} SL={s.stop_loss:.4f} TP={s.target:.4f} "
-            f"R:R={s.rr_ratio:.1f} Vol={s.vol_ratio:.1f}x Tai={s.tai_index:.0f}"
+            f"R:R={s.rr_ratio:.1f} Vol={s.vol_ratio:.1f}x Imb={s.imbalance:+.2f}"
         )
 
 
@@ -508,7 +579,7 @@ if __name__ == "__main__":
     from pathlib import Path
 
     # Load sample data
-    data_path = Path("/home/tahae/ai-content/data/Tradingdata/chart_data/BYBIT_SOLUSDT.P, 5_7ef98-new.csv")
+    data_path = Path("/home/tahae/ai-content/data/Tradingdata/volume charts/BTCUSDT_5m_merged.csv")
 
     if data_path.exists():
         df = pd.read_csv(data_path)
@@ -516,22 +587,24 @@ if __name__ == "__main__":
         if 'timestamp' in df.columns:
             df.rename(columns={'timestamp': 'time'}, inplace=True)
 
+        opens = df['open'].values
         closes = df['close'].values
         highs = df['high'].values
         lows = df['low'].values
         volumes = df['volume'].values
-        times = df['time'].values
+        times = df['time'].values if 'time' in df.columns else np.arange(len(df))
 
-        # Create strategy
+        # Create strategy with new aggressive settings
         strategy = BreakawayStrategy(
-            symbol="SOLUSDT",
+            symbol="BTCUSDT",
             timeframe="5",
-            min_vol_ratio=2.5,
+            min_vol_ratio=2.0,
+            use_imbalance_filter=True,
+            imbalance_threshold=0.10,
+            use_tai_filter=False,
+            use_trend_filter=False,
             trade_direction="both"
         )
-
-        # Calculate indicators
-        strategy.calculate_indicators(closes, highs, lows, volumes)
 
         # Scan historical data for signals
         signals_found = 0
@@ -540,7 +613,7 @@ if __name__ == "__main__":
 
         for i in range(300, len(closes)):
             signal = strategy.scan_for_signals(
-                closes[:i+1], highs[:i+1], lows[:i+1], volumes[:i+1], times[:i+1]
+                opens[:i+1], closes[:i+1], highs[:i+1], lows[:i+1], volumes[:i+1], times[:i+1]
             )
             if signal:
                 signals_found += 1

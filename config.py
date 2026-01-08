@@ -59,12 +59,27 @@ EXTRA_TIMEFRAMES = {
 @dataclass
 class BreakawayConfig:
     """Configuration for Breakaway strategy."""
-    # Strategy parameters (updated 2026-01-06 based on backtest)
+    # Strategy parameters (updated 2026-01-08 - aggressive imbalance mode)
     ewvma_length: int = 20
     ewvma_trend_length: int = 200
-    min_vol_ratio: float = 2.0  # Relaxed from 3.0 - 2x more trades, maintains quality
-    tai_threshold_short: float = 53.0  # Relaxed from 55.0
-    tai_threshold_long: float = 47.0  # Relaxed from 45.0
+    min_vol_ratio: float = 2.0  # Volume spike threshold
+
+    # NEW: Imbalance filter (replaces Tai/Trend) - 2026-01-08
+    use_imbalance_filter: bool = True  # Enable volume delta imbalance
+    imbalance_threshold: float = 0.10  # Require ±0.10 imbalance
+    imbalance_lookback: int = 10       # Lookback for imbalance calc
+
+    # NEW: Real order book confirmation (optional) - 2026-01-08
+    use_orderbook_confirm: bool = False  # Disabled by default - testing
+    orderbook_threshold: float = 0.05    # Require ±0.05 OB imbalance
+
+    # OLD: Tai/Trend filters (disabled by default - 2026-01-08)
+    use_tai_filter: bool = False       # Disabled - replaced by imbalance
+    tai_threshold_short: float = 53.0
+    tai_threshold_long: float = 47.0
+    use_trend_filter: bool = False     # Disabled - replaced by imbalance
+
+    # Cradle settings
     min_cradle_candles: int = 3
     cradle_lookback: int = 5
     risk_reward: float = 3.0
@@ -72,21 +87,21 @@ class BreakawayConfig:
 
     # Symbol management
     priority_symbols: List[str] = None
-    max_symbols: int = 22
+    max_symbols: int = 45  # Top 45 coins by volume
     trade_direction: str = "both"  # "both", "shorts", "longs"
 
     # Trading - 5-minute (default)
     max_positions: int = 5
-    risk_per_trade: float = 0.02
+    risk_per_trade: float = 0.01  # 1% risk per trade
 
     # 1-minute timeframe settings
-    enable_1m: bool = True
-    symbols_1m: int = 22                    # Top 22 for 1-min
-    risk_per_trade_1m: float = 0.01         # 1% risk for 1-min
-    max_positions_1m: int = 5               # Max 5 1-min positions
-    min_vol_ratio_1m: float = 2.0           # Relaxed from 3.0 based on backtest
-    cooldown_1m_minutes: int = 15           # 15-min between 1-min trades
-    candles_preload: int = 2000             # Preload 2000 candles
+    enable_1m: bool = False  # Disabled - 5-min only
+    symbols_1m: int = 22
+    risk_per_trade_1m: float = 0.01
+    max_positions_1m: int = 5
+    min_vol_ratio_1m: float = 2.0
+    cooldown_1m_minutes: int = 15
+    candles_preload: int = 2000
 
     def __post_init__(self):
         if self.priority_symbols is None:
@@ -102,19 +117,30 @@ class BreakawayConfig:
             ewvma_length=int(os.getenv("BREAKAWAY_EWVMA_LENGTH", "20")),
             ewvma_trend_length=int(os.getenv("BREAKAWAY_EWVMA_TREND_LENGTH", "200")),
             min_vol_ratio=float(os.getenv("BREAKAWAY_MIN_VOL_RATIO", "2.0")),
+            # NEW: Imbalance filter
+            use_imbalance_filter=os.getenv("BREAKAWAY_USE_IMBALANCE", "true").lower() == "true",
+            imbalance_threshold=float(os.getenv("BREAKAWAY_IMBALANCE_THRESHOLD", "0.10")),
+            imbalance_lookback=int(os.getenv("BREAKAWAY_IMBALANCE_LOOKBACK", "10")),
+            # NEW: Order book confirmation
+            use_orderbook_confirm=os.getenv("BREAKAWAY_USE_ORDERBOOK", "false").lower() == "true",
+            orderbook_threshold=float(os.getenv("BREAKAWAY_ORDERBOOK_THRESHOLD", "0.05")),
+            # OLD: Tai/Trend filters (disabled by default)
+            use_tai_filter=os.getenv("BREAKAWAY_USE_TAI", "false").lower() == "true",
             tai_threshold_short=float(os.getenv("BREAKAWAY_TAI_SHORT", "53.0")),
             tai_threshold_long=float(os.getenv("BREAKAWAY_TAI_LONG", "47.0")),
+            use_trend_filter=os.getenv("BREAKAWAY_USE_TREND", "false").lower() == "true",
+            # Cradle settings
             min_cradle_candles=int(os.getenv("BREAKAWAY_MIN_CRADLE", "3")),
             cradle_lookback=int(os.getenv("BREAKAWAY_CRADLE_LOOKBACK", "5")),
             risk_reward=float(os.getenv("BREAKAWAY_RISK_REWARD", "3.0")),
             sl_buffer_pct=float(os.getenv("BREAKAWAY_SL_BUFFER", "0.001")),
             priority_symbols=priority_list,
-            max_symbols=int(os.getenv("BREAKAWAY_MAX_SYMBOLS", "22")),
+            max_symbols=int(os.getenv("BREAKAWAY_MAX_SYMBOLS", "45")),
             trade_direction=os.getenv("BREAKAWAY_DIRECTION", "both"),
             max_positions=int(os.getenv("BREAKAWAY_MAX_POSITIONS", "5")),
-            risk_per_trade=float(os.getenv("BREAKAWAY_RISK_PER_TRADE", "0.02")),
+            risk_per_trade=float(os.getenv("BREAKAWAY_RISK_PER_TRADE", "0.01")),
             # 1-minute settings
-            enable_1m=os.getenv("BREAKAWAY_ENABLE_1M", "true").lower() == "true",
+            enable_1m=os.getenv("BREAKAWAY_ENABLE_1M", "false").lower() == "true",
             symbols_1m=int(os.getenv("BREAKAWAY_SYMBOLS_1M", "22")),
             risk_per_trade_1m=float(os.getenv("BREAKAWAY_RISK_1M", "0.01")),
             max_positions_1m=int(os.getenv("BREAKAWAY_MAX_POSITIONS_1M", "5")),
