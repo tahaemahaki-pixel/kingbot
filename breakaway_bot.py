@@ -347,9 +347,15 @@ class BreakoutBot:
         # First, update trailing stops for any open positions
         self._update_trailing_stops()
 
-        # Check position limits
-        open_count = self.order_manager.get_open_count()
-        if open_count >= self.breakout_config.max_positions:
+        # Check if max FILLED positions reached - cancel pending orders if so
+        filled_count = self.order_manager.get_filled_position_count()
+        if filled_count >= self.breakout_config.max_positions:
+            pending_count = self.order_manager.get_pending_order_count()
+            if pending_count > 0:
+                print(f"\n  Max positions ({filled_count}) filled - cancelling {pending_count} pending orders...")
+                cancelled = self.order_manager.cancel_all_pending_entry_orders()
+                if cancelled > 0:
+                    self._cancel_orphan_orders()  # Also cancel on exchange
             return
 
         # Skip if already have position for this symbol
@@ -559,9 +565,13 @@ class BreakoutBot:
         print(f"BREAKOUT BOT STATUS - {datetime.now().strftime('%H:%M:%S')}")
         print(f"{'='*60}")
 
+        filled = self.order_manager.get_filled_position_count()
+        pending = self.order_manager.get_pending_order_count()
+
         print(f"\n{self.timeframe}-MIN TIMEFRAME:")
         print(f"  Symbols: {len(self.feeds)}")
-        print(f"  Positions: {self.order_manager.get_open_count()}/{self.breakout_config.max_positions}")
+        print(f"  Filled positions: {filled}/{self.breakout_config.max_positions}")
+        print(f"  Pending orders: {pending}")
         print(f"  Active signals: {len(self.active_signals)}")
         print(f"  Signals: {self.signals_count} | Executed: {self.executed_count}")
 

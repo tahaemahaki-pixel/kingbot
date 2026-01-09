@@ -195,29 +195,36 @@ class OrderManager:
         return position_size
 
     def can_open_trade(self, account_balance: float, setup_key: str = None, symbol: str = None) -> tuple[bool, str]:
-        """Check if we can open a new trade based on risk rules."""
-        # Check max positions (include pending orders)
-        active_trades = [t for t in self.active_trades if t.status in (TradeStatus.OPEN, TradeStatus.PENDING_FILL)]
-        if len(active_trades) >= self.config.max_positions:
-            return False, f"Max positions ({self.config.max_positions}) reached"
+        """
+        Check if we can open a new trade based on risk rules.
 
-        # Check asset type limits (3 crypto + 2 non-crypto)
+        Note: Only checks FILLED positions, not pending orders.
+        This allows unlimited pending orders, but cancels them once max_positions fill.
+        """
+        # Check max FILLED positions only (pending orders are allowed)
+        filled_positions = [t for t in self.active_trades if t.status == TradeStatus.OPEN]
+        if len(filled_positions) >= self.config.max_positions:
+            return False, f"Max filled positions ({self.config.max_positions}) reached"
+
+        # Check asset type limits (3 crypto + 2 non-crypto) - only count filled
         if symbol:
             asset_type = get_asset_type(symbol)
             if asset_type == "crypto":
-                crypto_count = len([t for t in active_trades
+                crypto_count = len([t for t in filled_positions
                                    if get_asset_type(t.signal.symbol) == "crypto"])
                 if crypto_count >= self.config.max_crypto_positions:
                     return False, f"Max crypto positions ({self.config.max_crypto_positions}) reached"
             else:
-                non_crypto_count = len([t for t in active_trades
+                non_crypto_count = len([t for t in filled_positions
                                        if get_asset_type(t.signal.symbol) == "non_crypto"])
                 if non_crypto_count >= self.config.max_non_crypto_positions:
                     return False, f"Max non-crypto positions ({self.config.max_non_crypto_positions}) reached"
 
         # Check if we already have a trade/order for this setup (symbol+timeframe)
+        # This prevents duplicate orders for the same symbol - check all active (filled + pending)
         if setup_key:
-            existing_for_setup = [t for t in active_trades if (t.signal.setup_key or t.signal.symbol) == setup_key]
+            all_active = [t for t in self.active_trades if t.status in (TradeStatus.OPEN, TradeStatus.PENDING_FILL)]
+            existing_for_setup = [t for t in all_active if (t.signal.setup_key or t.signal.symbol) == setup_key]
             if existing_for_setup:
                 return False, f"Already have active trade/order for {setup_key}"
 
@@ -628,6 +635,38 @@ class OrderManager:
         """Get count of open positions and pending orders."""
         return len([t for t in self.active_trades
                     if t.status in (TradeStatus.OPEN, TradeStatus.PENDING_FILL)])
+
+    def get_filled_position_count(self) -> int:
+        """Get count of only FILLED positions (not pending orders)."""
+        return len([t for t in self.active_trades if t.status == TradeStatus.OPEN])
+
+    def get_pending_order_count(self) -> int:
+        """Get count of pending limit orders waiting to fill."""
+        return len([t for t in self.active_trades if t.status == TradeStatus.PENDING_FILL])
+
+    def cancel_all_pending_entry_orders(self) -> int:
+        """
+        Cancel all pending entry orders (PENDING_FILL status).
+        Used when max positions reached to prevent more fills.
+        Returns number of orders cancelled.
+        """
+        cancelled = 0
+        pending_trades = [t for t in self.active_trades if t.status == TradeStatus.PENDING_FILL]
+
+        for trade in pending_trades:
+            try:
+                if trade.entry_order_id:
+                    self.client.cancel_order(trade.signal.symbol, trade.entry_order_id)
+                    trade.status = TradeStatus.CANCELLED
+                    print(f"  [OrderMgr] Cancelled pending order: {trade.signal.symbol}")
+                    cancelled += 1
+            except Exception as e:
+                print(f"  [OrderMgr] Failed to cancel {trade.signal.symbol}: {e}")
+
+        # Remove cancelled trades from active list
+        self.active_trades = [t for t in self.active_trades if t.status != TradeStatus.CANCELLED]
+
+        return cancelled
 
     def place_order(
         self,
