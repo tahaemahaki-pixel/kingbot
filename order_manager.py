@@ -198,13 +198,16 @@ class OrderManager:
         """
         Check if we can open a new trade based on risk rules.
 
-        Note: Only checks FILLED positions, not pending orders.
-        This allows unlimited pending orders, but cancels them once max_positions fill.
+        Limits total exposure: filled + pending <= max_positions
+        This prevents exceeding max positions when multiple orders fill at once.
         """
-        # Check max FILLED positions only (pending orders are allowed)
+        # Check total exposure (filled + pending)
         filled_positions = [t for t in self.active_trades if t.status == TradeStatus.OPEN]
-        if len(filled_positions) >= self.config.max_positions:
-            return False, f"Max filled positions ({self.config.max_positions}) reached"
+        pending_positions = [t for t in self.active_trades if t.status == TradeStatus.PENDING_FILL]
+        total_exposure = len(filled_positions) + len(pending_positions)
+
+        if total_exposure >= self.config.max_positions:
+            return False, f"Max exposure ({total_exposure}/{self.config.max_positions}) reached (filled: {len(filled_positions)}, pending: {len(pending_positions)})"
 
         # Check asset type limits (3 crypto + 2 non-crypto) - only count filled
         if symbol:

@@ -668,8 +668,8 @@ class BreakoutBot:
             print(f"  Signals: {self.signals_count_1m} | Executed: {self.executed_count_1m}")
 
         print(f"\nPOSITIONS:")
-        print(f"  Filled: {filled}/{self.breakout_config.max_positions}")
-        print(f"  Pending orders: {pending}")
+        total_exposure = filled + pending
+        print(f"  Total exposure: {total_exposure}/{self.breakout_config.max_positions} (filled: {filled}, pending: {pending})")
         print(f"  Active signals: {len(self.active_signals)}")
 
         print(f"\nFILTERS:")
