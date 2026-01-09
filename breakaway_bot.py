@@ -220,6 +220,44 @@ class BreakoutBot:
         except Exception as e:
             print(f"  [State] Error syncing with positions: {e}")
 
+    def _cancel_orphan_orders(self):
+        """
+        Cancel all pending limit orders that don't have matching open positions.
+        This prevents order accumulation across bot restarts.
+        """
+        try:
+            # Get all open orders and positions
+            open_orders = self.client.get_open_orders()
+            positions = self.client.get_positions()
+            position_symbols = {p.symbol for p in positions if p.size > 0}
+
+            if not open_orders:
+                print("  [Orders] No pending orders found")
+                return
+
+            # Cancel orders for symbols without open positions
+            cancelled = 0
+            for order in open_orders:
+                # Keep orders for symbols with open positions (those are SL/TP orders)
+                if order.symbol in position_symbols:
+                    continue
+
+                # Cancel entry orders for symbols without positions
+                try:
+                    self.client.cancel_order(order.symbol, order.order_id)
+                    print(f"  [Orders] Cancelled orphan order: {order.symbol} {order.side} @ {order.price}")
+                    cancelled += 1
+                except Exception as e:
+                    print(f"  [Orders] Failed to cancel {order.symbol}: {e}")
+
+            if cancelled > 0:
+                print(f"  [Orders] Cancelled {cancelled} orphan orders")
+            else:
+                print(f"  [Orders] No orphan orders to cancel ({len(open_orders)} orders belong to open positions)")
+
+        except Exception as e:
+            print(f"  [Orders] Error cancelling orphan orders: {e}")
+
     # ==================== SYMBOL MANAGEMENT ====================
 
     def _refresh_symbols(self):
@@ -618,6 +656,7 @@ class BreakoutBot:
         print("\n--- STATE RECOVERY ---")
         self._load_signals()
         self._sync_signals_with_positions()
+        self._cancel_orphan_orders()  # Cancel any stale limit orders from previous runs
 
         # Fetch symbols
         self._refresh_symbols()
