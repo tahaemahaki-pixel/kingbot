@@ -574,12 +574,25 @@ def main():
     """Run scalping backtest on BTC, ETH, SOL."""
     DATA_DIR = Path("/home/tahae/ai-content/data/Tradingdata/volume-charts")
 
-    # Data files to test
-    data_files = {
-        'BTC': DATA_DIR / "BTCUSDT_5m_merged.csv",
-        'ETH': DATA_DIR / "BYBIT_ETHUSDT.P, 5_bf884-new.csv",
-        'SOL': DATA_DIR / "BYBIT_SOLUSDT.P, 5_7ef98-new.csv",
-    }
+    # Check command line args for timeframe
+    import sys
+    use_1m = len(sys.argv) > 1 and sys.argv[1] == "1m"
+
+    if use_1m:
+        # 1-minute data files
+        data_files = {
+            'BTC': DATA_DIR / "BYBIT_BTCUSDT.P, 1_1181a.csv",
+            'ETH': DATA_DIR / "BYBIT_ETHUSDT.P, 1_53528.csv",
+            'SOL': DATA_DIR / "BYBIT_SOLUSDT.P, 1_2d792.csv",
+        }
+        print("\n*** USING 1-MINUTE DATA ***\n")
+    else:
+        # 5-minute data files (default)
+        data_files = {
+            'BTC': DATA_DIR / "BTCUSDT_5m_merged.csv",
+            'ETH': DATA_DIR / "BYBIT_ETHUSDT.P, 5_bf884-new.csv",
+            'SOL': DATA_DIR / "BYBIT_SOLUSDT.P, 5_7ef98-new.csv",
+        }
 
     # Configuration
     config = ScalpConfig(
@@ -591,8 +604,8 @@ def main():
         max_hold_candles=30,
         trade_direction="both",
         use_fvg_breakout=True,
-        use_imbalance_flip=True,
-        use_ewvma_touch=True,
+        use_imbalance_flip=False,  # Disabled - negative expectancy
+        use_ewvma_touch=False,     # Disabled - negative expectancy
     )
 
     print("\n" + "="*60)

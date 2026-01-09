@@ -1,11 +1,13 @@
 """
-Breakout Optimized Trading Bot
+Breakout Optimized Trading Bot (breakout_bot.py)
 
+Strategy: Swing high breakout with ATR trailing stops
 Entry: Break above swing high + price above upper EVWMA(20) band
 Exit: ATR(14) * 2.0 trailing stop
 Filters: Volume spike (2x avg), Volume imbalance (10% threshold) - toggleable
 
-Configurable timeframe via BREAKOUT_TIMEFRAME env var (default: 5)
+Timeframes: 5-min (all symbols) + 1-min (configurable symbols)
+Config: BREAKOUT_* environment variables
 """
 
 import os
@@ -25,7 +27,7 @@ load_dotenv()
 # ==================== PID LOCK FILE ====================
 # Prevents multiple instances from running simultaneously
 
-LOCKFILE = "/tmp/breakout_bot.lock"
+LOCKFILE = "/tmp/breakout_bot.lock"  # Prevents multiple instances
 
 
 def check_lock():
@@ -770,10 +772,6 @@ class BreakoutBot:
 
         # Run main loop
         self._run_loop()
-
-
-# Alias for backwards compatibility
-BreakawayBot = BreakoutBot
 
 
 def main():
