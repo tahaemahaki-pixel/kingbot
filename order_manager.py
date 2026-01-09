@@ -761,6 +761,22 @@ class OrderManager:
                 )
                 self.active_trades.append(trade)
 
+                # Log trade to SQLite tracker
+                try:
+                    tracker_trade_id = self.tracker.record_trade_opened(
+                        symbol=symbol,
+                        setup_key=f"{symbol}_{signal_type}",
+                        signal_type=signal_type,
+                        entry_order_id=order.order_id,
+                        planned_entry_price=price or reference_price,
+                        position_size=rounded_qty,
+                        stop_loss=stop_loss or 0,
+                        take_profit=take_profit or 0,
+                    )
+                    self.trade_id_map[order.order_id] = tracker_trade_id
+                except Exception as e:
+                    print(f"  [Tracker] Failed to log trade: {e}")
+
             print(f"Breakaway order placed: {side} {rounded_qty} {symbol} @ {price or 'Market'}")
             return order
 
