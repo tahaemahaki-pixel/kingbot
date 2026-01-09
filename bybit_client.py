@@ -319,6 +319,28 @@ class BybitClient:
         self._request("POST", "/v5/order/cancel", params, signed=True)
         return True
 
+    def get_order_status(self, symbol: str, order_id: str) -> str:
+        """Get order status. Returns: New, PartiallyFilled, Filled, Cancelled, Rejected, etc."""
+        params = {
+            "category": self.config.category,
+            "symbol": symbol,
+            "orderId": order_id
+        }
+        result = self._request("GET", "/v5/order/realtime", params, signed=True)
+        orders = result.get("list", [])
+
+        if orders:
+            return orders[0].get("orderStatus", "Unknown")
+
+        # Order not in open orders - check history
+        result = self._request("GET", "/v5/order/history", params, signed=True)
+        orders = result.get("list", [])
+
+        if orders:
+            return orders[0].get("orderStatus", "Unknown")
+
+        return "Unknown"
+
     def cancel_all_orders(self, symbol: str) -> bool:
         """Cancel all orders for a symbol."""
         params = {"category": self.config.category, "symbol": symbol}
@@ -330,6 +352,9 @@ class BybitClient:
         params = {"category": self.config.category}
         if symbol:
             params["symbol"] = symbol
+        else:
+            # When no symbol specified, Bybit requires settleCoin
+            params["settleCoin"] = "USDT"
 
         result = self._request("GET", "/v5/order/realtime", params, signed=True)
         orders = []
@@ -369,6 +394,72 @@ class BybitClient:
 
         result = self._request("GET", "/v5/position/closed-pnl", params, signed=True)
         return result.get("list", [])
+
+    def get_last_price(self, symbol: str) -> float:
+        """Get the last traded price for a symbol."""
+        ticker = self.get_ticker(symbol)
+        return float(ticker.get("lastPrice", 0))
+
+    def set_trading_stop(
+        self,
+        symbol: str,
+        stop_loss: float = None,
+        take_profit: float = None,
+        position_idx: int = 0  # 0 = one-way mode
+    ) -> bool:
+        """
+        Modify stop loss and/or take profit for an existing position.
+
+        Args:
+            symbol: Trading pair
+            stop_loss: New stop loss price (None to keep current)
+            take_profit: New take profit price (None to keep current)
+            position_idx: 0 for one-way mode, 1 for buy-side (hedge), 2 for sell-side (hedge)
+
+        Returns:
+            True if successful
+        """
+        params = {
+            "category": self.config.category,
+            "symbol": symbol,
+            "positionIdx": position_idx
+        }
+
+        if stop_loss is not None:
+            params["stopLoss"] = str(stop_loss)
+            params["slTriggerBy"] = "LastPrice"
+
+        if take_profit is not None:
+            params["takeProfit"] = str(take_profit)
+            params["tpTriggerBy"] = "LastPrice"
+
+        self._request("POST", "/v5/position/trading-stop", params, signed=True)
+        return True
+
+    def close_partial_position(
+        self,
+        symbol: str,
+        qty: float,
+        side: str  # Side to close: "Buy" to close short, "Sell" to close long
+    ) -> Order:
+        """
+        Close a partial position using a market order with reduce_only.
+
+        Args:
+            symbol: Trading pair
+            qty: Quantity to close
+            side: "Buy" to close short, "Sell" to close long
+
+        Returns:
+            Order object
+        """
+        return self.place_order(
+            symbol=symbol,
+            side=side,
+            qty=qty,
+            order_type="Market",
+            reduce_only=True
+        )
 
 
 class BybitWebSocket:
