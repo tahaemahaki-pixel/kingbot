@@ -2,10 +2,10 @@
 Breakout Optimized Strategy
 
 Entry: Break above swing high + price above upper EVWMA(20) band
-Exit: ATR(14) * 2.0 trailing stop
+Exit: Fixed 1.5R take profit (default) or ATR trailing stop (legacy)
 Filters: Volume spike (2x avg), Volume imbalance (10% threshold) - toggleable
 
-Based on backtest results: 69.4% win rate, 4.81 PF with volume filters
+Fixed TP backtest: 51.7% win rate, +0.48R avg, +2,095R total over 69 days
 """
 
 from dataclasses import dataclass, field
@@ -409,10 +409,17 @@ class BreakoutStrategy:
         if initial_stop >= entry_price:
             return None
 
-        # Calculate emergency take profit (circuit breaker)
+        # Calculate take profit
         risk = entry_price - initial_stop
-        emergency_tp_mult = getattr(self.config, 'emergency_tp_multiplier', 10.0)
-        take_profit = entry_price + (risk * emergency_tp_mult)
+        use_fixed_tp = getattr(self.config, 'use_fixed_tp', True)
+        if use_fixed_tp:
+            # Fixed R:R take profit (e.g., 1.5R)
+            fixed_tp_mult = getattr(self.config, 'fixed_tp_multiplier', 1.5)
+            take_profit = entry_price + (risk * fixed_tp_mult)
+        else:
+            # Emergency TP only (trailing stop handles exit)
+            emergency_tp_mult = getattr(self.config, 'emergency_tp_multiplier', 10.0)
+            take_profit = entry_price + (risk * emergency_tp_mult)
 
         # Update last buy level to avoid duplicate signals
         self._last_buy_level = buy_level

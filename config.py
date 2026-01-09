@@ -194,8 +194,10 @@ class BreakoutConfig:
     max_positions: int = 5
     risk_per_trade: float = 0.01
 
-    # Emergency take profit (circuit breaker if bot crashes)
-    emergency_tp_multiplier: float = 10.0  # 10R emergency TP
+    # Take profit settings
+    use_fixed_tp: bool = True  # Use fixed R:R take profit instead of trailing stop
+    fixed_tp_multiplier: float = 1.5  # 1.5R fixed take profit (51.7% WR, +0.48R avg)
+    emergency_tp_multiplier: float = 10.0  # Fallback if use_fixed_tp=False
 
     # State persistence
     state_file: str = "data/breakout_signals.json"
@@ -246,7 +248,9 @@ class BreakoutConfig:
             # Position sizing
             max_positions=int(os.getenv("BREAKOUT_MAX_POSITIONS", "5")),
             risk_per_trade=float(os.getenv("BREAKOUT_RISK_PER_TRADE", "0.01")),
-            # Emergency TP
+            # Take profit settings
+            use_fixed_tp=os.getenv("BREAKOUT_USE_FIXED_TP", "true").lower() == "true",
+            fixed_tp_multiplier=float(os.getenv("BREAKOUT_FIXED_TP_MULTIPLIER", "1.5")),
             emergency_tp_multiplier=float(os.getenv("BREAKOUT_EMERGENCY_TP", "10.0")),
             # State persistence
             state_file=os.getenv("BREAKOUT_STATE_FILE", "data/breakout_signals.json"),

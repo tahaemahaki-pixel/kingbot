@@ -454,7 +454,10 @@ class BreakoutBot:
         print(f"  Direction: LONG")
         print(f"  Entry: {signal.entry_price:.6f}")
         print(f"  Initial Stop: {signal.initial_stop:.6f}")
-        print(f"  Emergency TP: {signal.take_profit:.6f} ({self.breakout_config.emergency_tp_multiplier}R)")
+        if self.breakout_config.use_fixed_tp:
+            print(f"  Take Profit: {signal.take_profit:.6f} ({self.breakout_config.fixed_tp_multiplier}R fixed)")
+        else:
+            print(f"  Emergency TP: {signal.take_profit:.6f} ({self.breakout_config.emergency_tp_multiplier}R)")
         print(f"  Risk: {signal.risk:.6f}")
         print(f"  Volume: {signal.vol_ratio:.1f}x")
         print(f"  Imbalance: {signal.imbalance:+.2f}")
@@ -469,7 +472,7 @@ class BreakoutBot:
 
         setup_key = signal.setup_key
         can_trade, reason = self.order_manager.can_open_trade(
-            self.account_balance,
+            self.account_equity,  # Use equity for risk checks
             setup_key=setup_key,
             symbol=signal.symbol
         )
@@ -477,8 +480,8 @@ class BreakoutBot:
             print(f"  Cannot execute: {reason}")
             return
 
-        # Calculate position size using configured risk
-        risk_amount = self.account_balance * self.breakout_config.risk_per_trade
+        # Calculate position size using equity (not available balance)
+        risk_amount = self.account_equity * self.breakout_config.risk_per_trade
         risk_distance = signal.risk
 
         if risk_distance <= 0:
@@ -488,14 +491,16 @@ class BreakoutBot:
         position_size = risk_amount / risk_distance
 
         try:
-            # Place order with SL and emergency TP (circuit breaker if bot crashes)
+            # Place order with SL and TP
+            # Fixed TP mode: 1.5R take profit, exchange handles exit
+            # Trailing mode: 10R emergency TP, bot manages trailing stop
             order = self.order_manager.place_order(
                 symbol=signal.symbol,
                 side="Buy",  # Longs only for now
                 qty=position_size,
                 price=signal.entry_price,
                 stop_loss=signal.initial_stop,
-                take_profit=signal.take_profit,  # Emergency TP as circuit breaker
+                take_profit=signal.take_profit,
                 order_type="Limit",
                 signal_type=f"breakout_{self.timeframe}m_long",
             )
@@ -515,8 +520,9 @@ class BreakoutBot:
                 self._save_signals()
 
                 print(f"  Order placed: BUY {position_size:.6f} @ {signal.entry_price:.6f}")
-                print(f"  Initial SL: {signal.initial_stop:.6f}")
-                print(f"  Emergency TP: {signal.take_profit:.6f}")
+                print(f"  SL: {signal.initial_stop:.6f}")
+                tp_label = "TP" if self.breakout_config.use_fixed_tp else "Emergency TP"
+                print(f"  {tp_label}: {signal.take_profit:.6f}")
 
         except Exception as e:
             print(f"  Order failed: {e}")
@@ -524,8 +530,15 @@ class BreakoutBot:
     # ==================== TRAILING STOP MANAGEMENT ====================
 
     def _update_trailing_stops(self):
-        """Update trailing stops for all open positions."""
+        """
+        Update trailing stops for all open positions.
+
+        When using fixed TP mode (use_fixed_tp=True), this only checks
+        if positions are closed - no trailing stop updates needed since
+        the exchange handles exits via the fixed TP and initial SL.
+        """
         signals_changed = False
+        use_fixed_tp = self.breakout_config.use_fixed_tp
 
         for setup_key, signal in list(self.active_signals.items()):
             if signal.status != BreakoutStatus.FILLED:
@@ -540,7 +553,12 @@ class BreakoutBot:
                 signals_changed = True
                 continue
 
-            # Get current candle data
+            # Skip trailing stop updates when using fixed TP
+            # Exchange handles exit via the fixed TP and initial SL
+            if use_fixed_tp:
+                continue
+
+            # Get current candle data (only needed for trailing stop mode)
             if setup_key not in self.feeds:
                 continue
 
@@ -591,17 +609,24 @@ class BreakoutBot:
         vol_filter = "ON" if self.breakout_config.use_volume_filter else "OFF"
         imb_filter = "ON" if self.breakout_config.use_imbalance_filter else "OFF"
 
+        if self.breakout_config.use_fixed_tp:
+            tp_line = f"Take Profit: {signal.take_profit:.6f} ({self.breakout_config.fixed_tp_multiplier}R fixed)"
+            exit_note = "Fixed TP - exchange handles exit"
+        else:
+            tp_line = f"Emergency TP: {signal.take_profit:.6f} ({self.breakout_config.emergency_tp_multiplier}R)"
+            exit_note = "Trailing stop will follow price up"
+
         msg = (
             f"🟢 <b>[{self.timeframe}-MIN] BREAKOUT SIGNAL</b>\n\n"
             f"Symbol: <b>{signal.symbol}</b>\n"
             f"Direction: <b>LONG</b>\n"
             f"Entry: {signal.entry_price:.6f}\n"
-            f"Initial Stop: {signal.initial_stop:.6f}\n"
-            f"Emergency TP: {signal.take_profit:.6f} ({self.breakout_config.emergency_tp_multiplier}R)\n"
+            f"Stop Loss: {signal.initial_stop:.6f}\n"
+            f"{tp_line}\n"
             f"Risk: {signal.risk:.6f}\n\n"
             f"Volume: {signal.vol_ratio:.1f}x (filter: {vol_filter})\n"
             f"Imbalance: {signal.imbalance:+.2f} (filter: {imb_filter})\n\n"
-            f"<i>Trailing stop will follow price up</i>"
+            f"<i>{exit_note}</i>"
         )
         self.notifier.send(msg)
 
@@ -721,8 +746,12 @@ class BreakoutBot:
         print(f"  Candles preload: {self.breakout_config.candles_preload}")
         print(f"\nSTRATEGY:")
         print(f"  Entry: Swing high breakout + above EVWMA({self.breakout_config.evwma_period}) upper band")
-        print(f"  Exit: ATR({self.breakout_config.atr_period}) x {self.breakout_config.atr_multiplier} trailing stop")
-        print(f"  Emergency TP: {self.breakout_config.emergency_tp_multiplier}R (circuit breaker)")
+        if self.breakout_config.use_fixed_tp:
+            print(f"  Exit: Fixed {self.breakout_config.fixed_tp_multiplier}R take profit")
+            print(f"  Stop: ATR({self.breakout_config.atr_period}) x {self.breakout_config.atr_multiplier} (no trailing)")
+        else:
+            print(f"  Exit: ATR({self.breakout_config.atr_period}) x {self.breakout_config.atr_multiplier} trailing stop")
+            print(f"  Emergency TP: {self.breakout_config.emergency_tp_multiplier}R (circuit breaker)")
         print(f"  Volume filter: {vol_filter} (>= {self.breakout_config.min_vol_ratio}x)")
         print(f"  Imbalance filter: {imb_filter} (>= {self.breakout_config.imbalance_threshold})")
         print(f"\nTestnet: {self.config.testnet}")
