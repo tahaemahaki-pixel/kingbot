@@ -151,6 +151,98 @@ class BreakawayConfig:
 
 
 @dataclass
+class BreakoutConfig:
+    """
+    Configuration for Breakout Optimized Strategy.
+
+    Entry: Break above swing high + price above upper EVWMA band
+    Exit: ATR trailing stop
+    Filters: Volume spike, Volume imbalance (toggleable)
+    """
+    # Pivot detection
+    pivot_left: int = 3
+    pivot_right: int = 3
+
+    # EVWMA filter
+    evwma_period: int = 20
+
+    # ATR stops
+    atr_period: int = 14
+    atr_multiplier: float = 2.0
+
+    # Volume filters (toggleable)
+    use_volume_filter: bool = True
+    min_vol_ratio: float = 2.0
+    volume_avg_period: int = 20
+
+    use_imbalance_filter: bool = True
+    imbalance_threshold: float = 0.10
+    imbalance_lookback: int = 10
+
+    # Timeframe
+    timeframe: str = "5"  # "1" or "5"
+
+    # Symbol management
+    priority_symbols: List[str] = None
+    max_symbols: int = 45
+
+    # Position sizing
+    max_positions: int = 5
+    risk_per_trade: float = 0.01
+
+    # Emergency take profit (circuit breaker if bot crashes)
+    emergency_tp_multiplier: float = 10.0  # 10R emergency TP
+
+    # State persistence
+    state_file: str = "data/breakout_signals.json"
+
+    # Historical data
+    candles_preload: int = 2000
+
+    def __post_init__(self):
+        if self.priority_symbols is None:
+            self.priority_symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "PNUTUSDT", "INJUSDT"]
+
+    @classmethod
+    def from_env(cls):
+        """Load from BREAKOUT_* environment variables."""
+        priority = os.getenv("BREAKOUT_PRIORITY_SYMBOLS", "BTCUSDT,ETHUSDT,SOLUSDT,PNUTUSDT,INJUSDT")
+        priority_list = [s.strip() for s in priority.split(",") if s.strip()]
+
+        return cls(
+            # Pivot detection
+            pivot_left=int(os.getenv("BREAKOUT_PIVOT_LEFT", "3")),
+            pivot_right=int(os.getenv("BREAKOUT_PIVOT_RIGHT", "3")),
+            # EVWMA filter
+            evwma_period=int(os.getenv("BREAKOUT_EVWMA_PERIOD", "20")),
+            # ATR stops
+            atr_period=int(os.getenv("BREAKOUT_ATR_PERIOD", "14")),
+            atr_multiplier=float(os.getenv("BREAKOUT_ATR_MULTIPLIER", "2.0")),
+            # Volume filters
+            use_volume_filter=os.getenv("BREAKOUT_USE_VOLUME_FILTER", "true").lower() == "true",
+            min_vol_ratio=float(os.getenv("BREAKOUT_MIN_VOL_RATIO", "2.0")),
+            volume_avg_period=int(os.getenv("BREAKOUT_VOLUME_AVG_PERIOD", "20")),
+            use_imbalance_filter=os.getenv("BREAKOUT_USE_IMBALANCE_FILTER", "true").lower() == "true",
+            imbalance_threshold=float(os.getenv("BREAKOUT_IMBALANCE_THRESHOLD", "0.10")),
+            imbalance_lookback=int(os.getenv("BREAKOUT_IMBALANCE_LOOKBACK", "10")),
+            # Timeframe
+            timeframe=os.getenv("BREAKOUT_TIMEFRAME", "5"),
+            # Symbol management
+            priority_symbols=priority_list,
+            max_symbols=int(os.getenv("BREAKOUT_MAX_SYMBOLS", "45")),
+            # Position sizing
+            max_positions=int(os.getenv("BREAKOUT_MAX_POSITIONS", "5")),
+            risk_per_trade=float(os.getenv("BREAKOUT_RISK_PER_TRADE", "0.01")),
+            # Emergency TP
+            emergency_tp_multiplier=float(os.getenv("BREAKOUT_EMERGENCY_TP", "10.0")),
+            # State persistence
+            state_file=os.getenv("BREAKOUT_STATE_FILE", "data/breakout_signals.json"),
+            # Historical data
+            candles_preload=int(os.getenv("BREAKOUT_CANDLES_PRELOAD", "2000")),
+        )
+
+
+@dataclass
 class SpreadPairConfig:
     """Configuration for a spread trading pair."""
     name: str = "ETH_BTC"

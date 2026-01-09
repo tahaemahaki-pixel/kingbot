@@ -954,3 +954,112 @@ class OrderManager:
             "spread_pnl": sum(t.realized_pnl for t in self.closed_spread_trades),
             "active_spread_trades": len(self.active_spread_trades)
         }
+
+    # ==================== SCALPING STRATEGY SUPPORT ====================
+
+    def close_partial_position(
+        self,
+        symbol: str,
+        close_pct: float,
+        is_long: bool,
+        reason: str = "partial_tp"
+    ) -> Optional[float]:
+        """
+        Close a partial position for scalping strategy.
+
+        Args:
+            symbol: Trading pair
+            close_pct: Percentage of position to close (0.0 to 1.0)
+            is_long: True if long position, False if short
+            reason: Reason for partial close
+
+        Returns:
+            Quantity closed if successful, None otherwise
+        """
+        try:
+            # Get current position
+            positions = self.client.get_positions(symbol)
+            if not positions:
+                print(f"No position found for {symbol}")
+                return None
+
+            position = positions[0]
+            current_size = position.size
+
+            if current_size <= 0:
+                print(f"No open position for {symbol}")
+                return None
+
+            # Calculate close quantity
+            close_qty = current_size * close_pct
+            close_qty = self._round_qty(symbol, close_qty, position.entry_price)
+
+            if close_qty <= 0:
+                print(f"Close quantity too small for {symbol}")
+                return None
+
+            # Close partial position
+            close_side = "Sell" if is_long else "Buy"
+            order = self.client.close_partial_position(
+                symbol=symbol,
+                qty=close_qty,
+                side=close_side
+            )
+
+            if order:
+                print(f"Partial close: {close_side} {close_qty} {symbol} ({reason})")
+                return close_qty
+
+            return None
+
+        except Exception as e:
+            print(f"Partial close failed for {symbol}: {e}")
+            return None
+
+    def modify_stop_loss(
+        self,
+        symbol: str,
+        new_sl: float,
+        new_tp: float = None
+    ) -> bool:
+        """
+        Modify stop loss (and optionally take profit) for an existing position.
+
+        Args:
+            symbol: Trading pair
+            new_sl: New stop loss price
+            new_tp: New take profit price (optional)
+
+        Returns:
+            True if successful
+        """
+        try:
+            success = self.client.set_trading_stop(
+                symbol=symbol,
+                stop_loss=new_sl,
+                take_profit=new_tp
+            )
+
+            if success:
+                print(f"SL modified for {symbol}: {new_sl}")
+                if new_tp:
+                    print(f"  TP also set to: {new_tp}")
+
+            return success
+
+        except Exception as e:
+            print(f"SL modification failed for {symbol}: {e}")
+            return False
+
+    def move_sl_to_breakeven(self, symbol: str, entry_price: float) -> bool:
+        """
+        Move stop loss to breakeven (entry price).
+
+        Args:
+            symbol: Trading pair
+            entry_price: Original entry price to use as new SL
+
+        Returns:
+            True if successful
+        """
+        return self.modify_stop_loss(symbol, entry_price)
