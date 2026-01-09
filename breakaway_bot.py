@@ -384,9 +384,12 @@ class BreakoutBot:
 
     def _on_new_candle(self, symbol: str, setup_key: str):
         """Process new confirmed candle."""
+        # Extract actual timeframe from setup_key
+        tf = setup_key.split("_")[-1] if "_" in setup_key else self.timeframe
+
         # Log candle close for debugging
         now = datetime.now().strftime("%H:%M:%S")
-        print(f"[{now}] {self.timeframe}m candle close: {symbol}")
+        print(f"[{now}] {tf}m candle close: {symbol}")
 
         # First, update trailing stops for any open positions
         self._update_trailing_stops()
