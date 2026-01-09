@@ -1,6 +1,10 @@
-# Double Touch Strategy Trading Bot
+# Bybit Trading Bot
 
-A crypto trading bot that scans multiple coins on Bybit for "Double Touch" patterns and automatically executes trades.
+A crypto trading bot that scans multiple coins on Bybit and automatically executes trades.
+
+**Active Strategy:** Breakout Optimized (swing high breakout with ATR trailing stops)
+
+**Legacy Strategies:** Double Touch, Breakaway FVG, Spread Trading
 
 ---
 
@@ -247,11 +251,11 @@ TELEGRAM_CHAT_ID=your_chat_id
 ```
 bybit_bot/
 ├── bot.py                    # Double Touch bot orchestrator
-├── config.py                 # Settings and coin list
-├── bybit_client.py           # Bybit API client
+├── config.py                 # Settings (BotConfig, BreakawayConfig, BreakoutConfig)
+├── bybit_client.py           # Bybit API + WebSocket client
 ├── data_feed.py              # Price data + indicators
 ├── double_touch_strategy.py  # Double Touch pattern detection
-├── order_manager.py          # Trade execution
+├── order_manager.py          # Trade execution + position management
 ├── notifier.py               # Telegram alerts
 ├── start.py                  # Entry point
 ├── trade_tracker.py          # Performance tracking (SQLite)
@@ -261,10 +265,22 @@ bybit_bot/
 ├── CLAUDE.md                 # This file
 ├── PERFORMANCE_CLI.md        # CLI documentation
 │
-├── # Breakaway Strategy (ACTIVE)
-├── breakaway_bot.py          # Breakaway bot orchestrator
-├── breakaway_strategy.py     # Breakaway signal detection & indicators
+├── # Breakout Optimized Strategy (ACTIVE)
+├── breakaway_bot.py          # Main bot orchestrator (uses breakout strategy)
+├── breakout_strategy.py      # Breakout signal detection, ATR trailing stops
 ├── symbol_scanner.py         # Top 50 coin fetcher by volume
+├── sync_trades.sh            # Sync trade CSVs from VPS to local
+│
+├── data/
+│   ├── trading_performance.db  # SQLite trade history
+│   └── breakout_signals.json   # Persisted signal state
+│
+├── exports/                  # Trade CSV exports (synced from VPS)
+│   ├── trades_latest.csv     # Most recent export
+│   └── trades_YYYY-MM-DD.csv # Daily exports
+│
+├── # Legacy Strategies
+├── breakaway_strategy.py     # Breakaway FVG signal detection (legacy)
 │
 ├── # Spread Trading
 ├── spread_strategy.py        # MR Double Touch pattern detection for spreads
@@ -415,7 +431,376 @@ pkill -f TradingBot
 
 ---
 
-## Breakaway Strategy Bot (ACTIVE) - 5-Minute Scanner
+## Scalping Strategy Bot (NEW) - FVG Breakout with Partial Exits
+
+High-frequency scalping bot for BTC, ETH, SOL targeting **9+ trades/day** with **85%+ win rate**.
+
+### Key Differences from Breakaway
+
+| Aspect | Breakaway | **Scalping** |
+|--------|-----------|--------------|
+| Win Rate | 60-70% | **85-90%** |
+| R:R Ratio | 3:1 (full) | **1.5:1 (partial)** |
+| Avg Winner | 3.0R | **1.25R** |
+| Expectancy | +0.8-1.0R | **+0.8R** |
+| Trades/Day | ~3 | **~9** |
+| Hold Time | 60-80 min | **~25 min** |
+| Exit System | Single TP | **Partial (50%@1R, 50%@1.5R)** |
+
+### Configuration
+
+| Parameter | Value |
+|-----------|-------|
+| **Symbols** | BTCUSDT, ETHUSDT, SOLUSDT |
+| **Timeframe** | 5-minute |
+| **Risk per trade** | 0.5% |
+| **Max positions** | 5 |
+| **Volume filter** | ≥1.5x average |
+| **TP1** | 1.0R (close 50%) |
+| **TP2** | 1.5R (close remaining) |
+| **Move SL to BE** | Yes, after TP1 |
+| **Max hold** | 30 candles |
+| **Cooldown** | 5 candles after exit |
+
+### Entry Conditions (ALL Required)
+
+| Condition | SHORT | LONG |
+|-----------|-------|------|
+| FVG | Bearish: `high < low[-2]` | Bullish: `low > high[-2]` |
+| EWVMA Cradle | 3+ of 5 candles in bands | Same |
+| Volume Spike | ≥ 1.5x 20-period average | Same |
+| Imbalance | ≤ -0.10 (selling) | ≥ +0.10 (buying) |
+
+### Exit System
+
+```
+Position Entry (100%)
+        │
+        ├──► TP1 @ 1.0R reached
+        │    ├── Close 50% of position
+        │    └── Move Stop Loss to Entry (breakeven)
+        │
+        └──► TP2 @ 1.5R reached
+             └── Close remaining 50%
+
+Average realized per full winner: 1.25R
+```
+
+### Backtest Results (FVG Breakout Only)
+
+| Asset | Trades | Win Rate | Expectancy | Trades/Day |
+|-------|--------|----------|------------|------------|
+| BTC | 1,751 | 84.8% | +0.784R | 6.3 |
+| ETH | 427 | 88.8% | +0.870R | 6.1 |
+| SOL | 429 | 86.5% | +0.849R | 6.2 |
+| **Total** | **2,607** | **85.7%** | **+0.809R** | **9.3** |
+
+### Start Scalping Bot
+
+```bash
+cd /root/kingbot
+pkill -f scalp_bot  # Stop any existing instance
+
+nohup python3 -u scalp_bot.py > scalp_bot.log 2>&1 &
+```
+
+### Monitor Scalping Bot
+
+| Action | Command |
+|--------|---------|
+| Check if running | `pgrep -f scalp_bot` |
+| Watch live | `tail -f scalp_bot.log` |
+| Last 50 lines | `tail -50 scalp_bot.log` |
+| Stop the bot | `pkill -f scalp_bot` |
+
+### Scalping Files
+
+| File | Description |
+|------|-------------|
+| `scalp_bot.py` | Main bot orchestrator |
+| `scalp_strategy.py` | Signal detection with partial exits |
+| `scalp_config.py` | Configuration dataclass |
+| `backtests/backtest_scalp.py` | Backtest validation |
+| `SCALPING_STRATEGY.md` | Full strategy documentation |
+
+### Environment Variables
+
+```bash
+SCALP_SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT
+SCALP_TIMEFRAME=5
+SCALP_MIN_VOL_RATIO=1.5
+SCALP_IMBALANCE_THRESHOLD=0.10
+SCALP_TP1_R=1.0
+SCALP_TP2_R=1.5
+SCALP_TP1_CLOSE_PCT=0.50
+SCALP_MOVE_SL_TO_BE=true
+SCALP_MAX_HOLD=30
+SCALP_RISK_PER_TRADE=0.005
+SCALP_MAX_POSITIONS=5
+SCALP_COOLDOWN=5
+SCALP_DIRECTION=both
+```
+
+---
+
+## Breakout Optimized Strategy Bot (ACTIVE) - 5-Minute Scanner
+
+The Breakout Optimized bot trades **swing high breakouts** on the 5-minute timeframe with ATR trailing stops. This strategy showed **+3,135R** in backtesting with 69.4% win rate.
+
+### Strategy Overview
+
+**Entry Conditions (ALL required):**
+
+| Condition | LONG |
+|-----------|------|
+| Price Action | Break above most recent pivot high |
+| EVWMA Filter | Close > upper EVWMA(20) band (strong uptrend) |
+| Volume Spike | ≥ 2.0x 20-period average (toggleable) |
+| Volume Imbalance | ≥ +0.10 buying pressure (toggleable) |
+
+**Exit Rules:**
+- Initial Stop: Entry - (ATR(14) * 2.0)
+- Trailing Stop: Moves up with price on candle close
+- Emergency TP: 10R circuit breaker (if bot crashes)
+
+### Configuration
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| **Symbols** | 45 pairs | Top by volume + priority |
+| **Timeframe** | 5-minute | Candle close trigger |
+| **Risk per trade** | 1% | Position sizing |
+| **Max positions** | 5 | Filled positions limit |
+| **Pending orders** | Unlimited | Cancel when 5 fill |
+| **ATR period** | 14 | Trailing stop calculation |
+| **ATR multiplier** | 2.0 | Stop distance |
+| **Emergency TP** | 10R | Circuit breaker |
+
+### State Persistence & Crash Recovery
+
+The bot persists active signals to disk for crash recovery:
+
+| Feature | Description |
+|---------|-------------|
+| **State file** | `data/breakout_signals.json` |
+| **Save trigger** | Every signal update |
+| **Load on startup** | Restores active signals |
+| **Orphan cleanup** | Cancels stale limit orders |
+| **Position sync** | Matches signals to open positions |
+
+### Position Management
+
+The bot allows **unlimited pending limit orders** but cancels all unfilled orders when 5 positions are filled:
+
+```
+Signal 1 → Limit order placed (pending)
+Signal 2 → Limit order placed (pending)
+...
+Signal 5 fills → 5th position opened
+Signal 6 fires → Check filled count (5) → Cancel all pending orders
+```
+
+### Start Breakout Bot
+
+```bash
+ssh root@209.38.84.47
+cd /root/kingbot
+
+# Via systemd (recommended - auto-restart)
+sudo systemctl restart breakout-bot
+sudo systemctl status breakout-bot
+
+# Or manually
+pkill -f breakaway_bot || true
+nohup python3 -u breakaway_bot.py > breakout_bot.log 2>&1 &
+```
+
+### Monitor Breakout Bot
+
+| Action | Command |
+|--------|---------|
+| Service status | `sudo systemctl status breakout-bot` |
+| View logs | `journalctl -u breakout-bot -f` |
+| Check if running | `pgrep -f breakaway_bot` |
+| Watch log file | `tail -f breakout_bot.log` |
+| Stop the bot | `sudo systemctl stop breakout-bot` |
+
+### Understanding Breakout Output
+
+```
+============================================================
+BREAKOUT BOT STATUS - 13:27:45
+============================================================
+
+5-MIN TIMEFRAME:
+  Symbols: 45
+  Filled Positions: 3/5
+  Pending Orders: 7
+  Signals: 10 | Executed: 3
+
+ACCOUNT:
+  Balance: $215.46
+  Equity: $218.92
+  Total Open: 3
+============================================================
+```
+
+When a signal triggers:
+```
+============================================================
+[5-MIN] NEW BREAKOUT SIGNAL - SOLUSDT
+============================================================
+  Direction: LONG
+  Entry: 187.450000 (limit at swing high)
+  Stop Loss: 185.012550 (ATR trailing)
+  Emergency TP: 211.825500 (10R circuit breaker)
+  Volume: 3.2x
+  Imbalance: +0.25
+============================================================
+```
+
+### Breakout Parameters
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| Pivot Left/Right | 3 | Swing high detection lookback |
+| EVWMA Period | 20 | Trend bands |
+| ATR Period | 14 | Stop calculation |
+| ATR Multiplier | 2.0 | Stop distance (2x ATR) |
+| Volume Threshold | 2.0x | Min volume spike |
+| Imbalance Threshold | ±0.10 | Volume delta imbalance |
+| Emergency TP | 10R | Circuit breaker |
+| State File | `data/breakout_signals.json` | Persistence |
+
+### Breakout Environment Variables
+
+```bash
+# Core settings
+BREAKOUT_TIMEFRAME=5
+BREAKOUT_MAX_POSITIONS=5
+BREAKOUT_RISK_PER_TRADE=0.01
+BREAKOUT_MAX_SYMBOLS=45
+BREAKOUT_PRIORITY_SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT,PNUTUSDT,INJUSDT
+
+# Pivot detection
+BREAKOUT_PIVOT_LEFT=3
+BREAKOUT_PIVOT_RIGHT=3
+
+# EVWMA bands
+BREAKOUT_EVWMA_PERIOD=20
+
+# ATR trailing stops
+BREAKOUT_ATR_PERIOD=14
+BREAKOUT_ATR_MULTIPLIER=2.0
+
+# Volume filters (toggleable)
+BREAKOUT_USE_VOLUME_FILTER=true
+BREAKOUT_MIN_VOL_RATIO=2.0
+BREAKOUT_VOLUME_AVG_PERIOD=20
+
+# Imbalance filter (toggleable)
+BREAKOUT_USE_IMBALANCE_FILTER=true
+BREAKOUT_IMBALANCE_THRESHOLD=0.10
+BREAKOUT_IMBALANCE_LOOKBACK=10
+
+# Emergency take profit
+BREAKOUT_EMERGENCY_TP_MULTIPLIER=10.0
+```
+
+### Breakout Files
+
+| File | Description |
+|------|-------------|
+| `breakaway_bot.py` | Main bot orchestrator (now uses breakout strategy) |
+| `breakout_strategy.py` | Signal detection, indicators, trailing stops |
+| `config.py` | BreakoutConfig dataclass |
+| `data/breakout_signals.json` | Persisted signal state |
+
+---
+
+## Trade Export System
+
+### Daily CSV Export
+
+Trades are automatically exported to CSV daily at midnight UTC via cron job on VPS.
+
+**VPS Export Script:** `/root/kingbot/export_trades.py`
+**Local Sync Script:** `sync_trades.sh`
+**Export Location (VPS):** `/root/kingbot/exports/`
+**Export Location (Local):** `exports/`
+
+### Sync Trades Locally
+
+```bash
+cd /home/tahae/ai-content/data/Tradingdata/bybit_bot
+./sync_trades.sh
+```
+
+This will:
+1. SSH to VPS and run export_trades.py
+2. Rsync CSV files to local `exports/` folder
+3. Show trade count
+
+### Cron Job (VPS)
+
+```bash
+# View cron jobs
+crontab -l
+
+# Runs at midnight UTC daily
+0 0 * * * cd /root/kingbot && /usr/bin/python3 export_trades.py >> /root/kingbot/export.log 2>&1
+```
+
+### Export Files
+
+| File | Description |
+|------|-------------|
+| `trades_latest.csv` | Most recent export (symlinked) |
+| `trades_YYYY-MM-DD.csv` | Daily timestamped exports |
+
+---
+
+## Systemd Services
+
+### Breakout Bot Service
+
+The bot runs as a systemd service with auto-restart on crash.
+
+**Service File:** `/etc/systemd/system/breakout-bot.service`
+
+```ini
+[Unit]
+Description=Breakout Trading Bot
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/kingbot
+ExecStart=/usr/bin/python3 -u breakaway_bot.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/root/kingbot/breakout_bot.log
+StandardError=append:/root/kingbot/breakout_bot.log
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Service Commands
+
+| Action | Command |
+|--------|---------|
+| Start bot | `sudo systemctl start breakout-bot` |
+| Stop bot | `sudo systemctl stop breakout-bot` |
+| Restart bot | `sudo systemctl restart breakout-bot` |
+| Check status | `sudo systemctl status breakout-bot` |
+| View logs | `journalctl -u breakout-bot -f` |
+| Enable on boot | `sudo systemctl enable breakout-bot` |
+
+---
+
+## Breakaway Strategy Bot (LEGACY) - 5-Minute Scanner
 
 The Breakaway bot trades counter-trend FVG setups on the **5-minute timeframe** using volume spikes and **Volume Delta Imbalance** confirmation.
 
@@ -660,6 +1045,70 @@ data/trading_performance.db
 ---
 
 ## Changelog / Fixes
+
+### 2026-01-09: Breakout Optimized Strategy Implementation
+
+**Overview:** Replaced Breakaway FVG strategy with Breakout Optimized strategy based on backtest showing +3,135R (69.4% win rate).
+
+**Strategy Changes:**
+
+| Aspect | Breakaway (Old) | Breakout (New) |
+|--------|-----------------|----------------|
+| Entry | FVG (Fair Value Gap) | Swing high breakout |
+| Trend Filter | EWVMA cradle (inside bands) | EVWMA bands (above upper) |
+| Exit | Fixed 3:1 R:R target | ATR trailing stop |
+| Direction | Both (longs + shorts) | Longs only |
+| Stop Management | Set at entry, never changes | Trails up with price |
+
+**New Features:**
+
+1. **State Persistence:**
+   - Signals saved to `data/breakout_signals.json`
+   - Survives bot restarts/crashes
+   - Syncs with open positions on startup
+
+2. **Emergency Take Profit:**
+   - 10R circuit breaker TP sent to exchange
+   - Protects against bot crash scenarios
+
+3. **Orphan Order Cleanup:**
+   - Cancels stale limit orders on startup
+   - Prevents order accumulation across restarts
+
+4. **Position Limit Logic:**
+   - Unlimited pending limit orders allowed
+   - When 5 positions fill, all pending orders cancelled
+   - Prevents over-exposure
+
+5. **Trade Logging:**
+   - All breakout trades logged to SQLite
+   - Accessible via `python start.py trades`
+
+6. **Daily CSV Export:**
+   - Cron job exports trades at midnight UTC
+   - `sync_trades.sh` syncs to local machine
+
+7. **Systemd Service:**
+   - `breakout-bot.service` for auto-restart
+   - Replaces manual nohup startup
+
+**Files Created:**
+- `breakout_strategy.py` - New strategy with ATR trailing stops
+- `sync_trades.sh` - Local trade sync script
+- `vps-breakoutbot.md` - VPS deployment guide (on GitHub)
+
+**Files Modified:**
+- `breakaway_bot.py` - State persistence, orphan cleanup, position logic
+- `config.py` - Added BreakoutConfig dataclass
+- `order_manager.py` - Added `get_filled_position_count()`, `get_pending_order_count()`, `cancel_all_pending_entry_orders()`
+- `bybit_client.py` - Fixed `get_open_orders()` API call (settleCoin param)
+
+**VPS Deployment:**
+- Created `/etc/systemd/system/breakout-bot.service`
+- Disabled old `kingbot.service`
+- Set up cron for daily exports
+
+---
 
 ### 2026-01-08: Aggressive Breakaway Strategy - Imbalance Filter
 

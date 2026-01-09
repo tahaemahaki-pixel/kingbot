@@ -92,8 +92,13 @@ class BreakoutBot:
         self.breakout_config = breakout_config or BreakoutConfig.from_env()
         self.running = False
 
-        # Timeframe from config
+        # Default timeframe (5-min for most symbols)
         self.timeframe = self.breakout_config.timeframe
+
+        # 1-minute symbols (if enabled)
+        self.symbols_1m: List[str] = []
+        if self.breakout_config.enable_1m and self.breakout_config.symbols_1m:
+            self.symbols_1m = self.breakout_config.symbols_1m
 
         # Initialize client
         self.client = BybitClient(config)
@@ -105,7 +110,7 @@ class BreakoutBot:
         self.symbol_scanner = SymbolScanner(self.client)
 
         # Data feeds and strategies (keyed by setup_key)
-        self.symbols: List[str] = []
+        self.symbols: List[str] = []  # All symbols (5-min)
         self.feeds: Dict[str, DataFeed] = {}
         self.strategies: Dict[str, BreakoutStrategy] = {}
 
@@ -123,9 +128,11 @@ class BreakoutBot:
         # Performance tracking
         self.tracker = get_tracker()
 
-        # Stats
+        # Stats (per timeframe)
         self.signals_count = 0
         self.executed_count = 0
+        self.signals_count_1m = 0
+        self.executed_count_1m = 0
 
         # State persistence path
         self.state_file = Path(self.breakout_config.state_file)
@@ -274,9 +281,10 @@ class BreakoutBot:
     # ==================== FEED INITIALIZATION ====================
 
     def _initialize_feeds(self):
-        """Initialize data feeds for all symbols."""
+        """Initialize data feeds for all symbols (5-min) and 1-min symbols if enabled."""
         candles_to_load = self.breakout_config.candles_preload
 
+        # ---- 5-MINUTE FEEDS ----
         print(f"\nLoading {self.timeframe}-min data for {len(self.symbols)} symbols ({candles_to_load} candles)...")
         success = 0
 
@@ -306,11 +314,45 @@ class BreakoutBot:
 
         print(f"{self.timeframe}-min: {success}/{len(self.symbols)} symbols loaded")
 
+        # ---- 1-MINUTE FEEDS (for specific symbols) ----
+        if self.symbols_1m:
+            print(f"\nLoading 1-min data for {len(self.symbols_1m)} symbols ({candles_to_load} candles)...")
+            success_1m = 0
+
+            for i, symbol in enumerate(self.symbols_1m):
+                setup_key = make_setup_key(symbol, "1")
+                try:
+                    feed = DataFeed(self.config, self.client, symbol, timeframe="1")
+                    feed.load_historical(candles_to_load)
+                    self.feeds[setup_key] = feed
+
+                    # Create strategy for 1-min
+                    strategy = BreakoutStrategy(
+                        symbol=symbol,
+                        timeframe="1",
+                        config=self.breakout_config
+                    )
+                    self.strategies[setup_key] = strategy
+                    success_1m += 1
+
+                    time.sleep(0.2)
+
+                except Exception as e:
+                    print(f"  Error loading 1-min {symbol}: {e}")
+
+            print(f"1-min: {success_1m}/{len(self.symbols_1m)} symbols loaded")
+
     # ==================== WEBSOCKET ====================
 
     def _connect_websocket(self):
-        """Connect WebSocket and subscribe to all symbols."""
+        """Connect WebSocket and subscribe to all symbols (both timeframes)."""
+        # 5-minute subscriptions for all symbols
         subscriptions = [(symbol, self.timeframe) for symbol in self.symbols]
+
+        # Add 1-minute subscriptions for specific symbols
+        if self.symbols_1m:
+            for symbol in self.symbols_1m:
+                subscriptions.append((symbol, "1"))
 
         self.ws = BybitWebSocket(
             self.config,
@@ -321,6 +363,8 @@ class BreakoutBot:
 
         print(f"\nWebSocket connected:")
         print(f"  {self.timeframe}-min feeds: {len(self.symbols)}")
+        if self.symbols_1m:
+            print(f"  1-min feeds: {len(self.symbols_1m)} ({', '.join(self.symbols_1m)})")
 
     def _on_kline(self, data: Dict):
         """Handle incoming kline data."""
@@ -391,10 +435,16 @@ class BreakoutBot:
 
     def _handle_signal(self, signal: BreakoutSignal):
         """Handle a new breakout signal."""
-        self.signals_count += 1
+        # Extract timeframe from setup_key
+        tf = signal.setup_key.split("_")[-1] if "_" in signal.setup_key else self.timeframe
+
+        if tf == "1":
+            self.signals_count_1m += 1
+        else:
+            self.signals_count += 1
 
         print(f"\n{'='*60}")
-        print(f"[{self.timeframe}-MIN] NEW BREAKOUT SIGNAL - {signal.symbol}")
+        print(f"[{tf}-MIN] NEW BREAKOUT SIGNAL - {signal.symbol}")
         print(f"{'='*60}")
         print(f"  Direction: LONG")
         print(f"  Entry: {signal.entry_price:.6f}")
@@ -446,7 +496,13 @@ class BreakoutBot:
             )
 
             if order:
-                self.executed_count += 1
+                # Track execution by timeframe
+                tf = setup_key.split("_")[-1] if "_" in setup_key else self.timeframe
+                if tf == "1":
+                    self.executed_count_1m += 1
+                else:
+                    self.executed_count += 1
+
                 signal.status = BreakoutStatus.FILLED
                 self.active_signals[setup_key] = signal
 
@@ -568,12 +624,23 @@ class BreakoutBot:
         filled = self.order_manager.get_filled_position_count()
         pending = self.order_manager.get_pending_order_count()
 
+        # Count feeds by timeframe
+        feeds_5m = len([k for k in self.feeds.keys() if k.endswith(f"_{self.timeframe}")])
+        feeds_1m = len([k for k in self.feeds.keys() if k.endswith("_1")])
+
         print(f"\n{self.timeframe}-MIN TIMEFRAME:")
-        print(f"  Symbols: {len(self.feeds)}")
-        print(f"  Filled positions: {filled}/{self.breakout_config.max_positions}")
+        print(f"  Symbols: {feeds_5m}")
+        print(f"  Signals: {self.signals_count} | Executed: {self.executed_count}")
+
+        if self.symbols_1m:
+            print(f"\n1-MIN TIMEFRAME:")
+            print(f"  Symbols: {feeds_1m} ({', '.join(self.symbols_1m)})")
+            print(f"  Signals: {self.signals_count_1m} | Executed: {self.executed_count_1m}")
+
+        print(f"\nPOSITIONS:")
+        print(f"  Filled: {filled}/{self.breakout_config.max_positions}")
         print(f"  Pending orders: {pending}")
         print(f"  Active signals: {len(self.active_signals)}")
-        print(f"  Signals: {self.signals_count} | Executed: {self.executed_count}")
 
         print(f"\nFILTERS:")
         print(f"  Volume spike: {vol_filter} (>= {self.breakout_config.min_vol_ratio}x)")
@@ -640,7 +707,9 @@ class BreakoutBot:
         print("BREAKOUT OPTIMIZED BOT")
         print("=" * 60)
         print(f"\nCONFIG:")
-        print(f"  Timeframe: {self.timeframe}-minute")
+        print(f"  Default timeframe: {self.timeframe}-minute")
+        if self.symbols_1m:
+            print(f"  1-minute symbols: {', '.join(self.symbols_1m)}")
         print(f"  Symbols: Top {self.breakout_config.max_symbols}")
         print(f"  Risk: {self.breakout_config.risk_per_trade * 100}%")
         print(f"  Max positions: {self.breakout_config.max_positions}")
@@ -681,6 +750,10 @@ class BreakoutBot:
         msg = (
             f"🤖 <b>BREAKOUT BOT STARTED</b>\n\n"
             f"<b>{self.timeframe}-MIN:</b> {len(self.symbols)} symbols\n"
+        )
+        if self.symbols_1m:
+            msg += f"<b>1-MIN:</b> {', '.join(self.symbols_1m)}\n"
+        msg += (
             f"Risk: {self.breakout_config.risk_per_trade*100}%\n"
             f"Max positions: {self.breakout_config.max_positions}\n"
             f"Volume filter: {vol_filter}\n"

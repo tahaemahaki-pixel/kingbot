@@ -179,14 +179,18 @@ class BreakoutConfig:
     imbalance_threshold: float = 0.10
     imbalance_lookback: int = 10
 
-    # Timeframe
+    # Timeframe (default for most symbols)
     timeframe: str = "5"  # "1" or "5"
+
+    # 1-minute timeframe for specific symbols
+    enable_1m: bool = False
+    symbols_1m: List[str] = None  # Symbols to trade on 1-min (e.g., BTC, ETH, SOL)
 
     # Symbol management
     priority_symbols: List[str] = None
     max_symbols: int = 45
 
-    # Position sizing
+    # Position sizing (shared across timeframes)
     max_positions: int = 5
     risk_per_trade: float = 0.01
 
@@ -202,12 +206,18 @@ class BreakoutConfig:
     def __post_init__(self):
         if self.priority_symbols is None:
             self.priority_symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "PNUTUSDT", "INJUSDT"]
+        if self.symbols_1m is None:
+            self.symbols_1m = []  # Empty by default - no 1-min trading
 
     @classmethod
     def from_env(cls):
         """Load from BREAKOUT_* environment variables."""
         priority = os.getenv("BREAKOUT_PRIORITY_SYMBOLS", "BTCUSDT,ETHUSDT,SOLUSDT,PNUTUSDT,INJUSDT")
         priority_list = [s.strip() for s in priority.split(",") if s.strip()]
+
+        # 1-minute symbols (comma-separated)
+        symbols_1m_str = os.getenv("BREAKOUT_SYMBOLS_1M", "")
+        symbols_1m = [s.strip() for s in symbols_1m_str.split(",") if s.strip()]
 
         return cls(
             # Pivot detection
@@ -227,6 +237,9 @@ class BreakoutConfig:
             imbalance_lookback=int(os.getenv("BREAKOUT_IMBALANCE_LOOKBACK", "10")),
             # Timeframe
             timeframe=os.getenv("BREAKOUT_TIMEFRAME", "5"),
+            # 1-minute settings
+            enable_1m=os.getenv("BREAKOUT_ENABLE_1M", "false").lower() == "true",
+            symbols_1m=symbols_1m if symbols_1m else None,
             # Symbol management
             priority_symbols=priority_list,
             max_symbols=int(os.getenv("BREAKOUT_MAX_SYMBOLS", "45")),
